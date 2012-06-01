@@ -277,16 +277,16 @@ mk_outer(#cnf{print_depth=Depth,print_msec=MS} = Cnf) ->
   fun({Tag,Data,PI,TS}) ->
       MTS = fix_ts(MS,TS),
       case {Tag,Data} of
-        {'call',{MFA,Bin}} ->
+        {'call',{{M,F,A},Bin}} ->
           case Cnf#cnf.print_calls of
             true -> 
-              OutFun("~n~s <~p> ~P",[MTS,PI,MFA,Depth]),
+              OutFun("~n~s <~p> ~p:~p~s",[MTS,PI,M,F,pretty_args(A,Depth)]),
               foreach(fun(L)->OutFun("  ~s",[L]) end, stak(Bin));
             false->
               ok
           end;
-        {'retn',{MFA,Val}} ->
-          OutFun("~n~s <~p> ~p -> ~P",[MTS,PI,MFA,Val,Depth]);
+        {'retn',{{M,F,A},Val}} ->
+          OutFun("~n~s <~p> ~p:~p/~p -> ~P",[MTS,PI,M,F,A,Val,Depth]);
         {'send',{MSG,To}} ->
           OutFun("~n~s <~p> <~p> <<< ~P",[MTS,PI,To,MSG,Depth]);
         {'recv',MSG} ->
@@ -309,6 +309,12 @@ get_fd(FN) ->
     {ok,FD} -> FD;
     _ -> exit({cannot_open,FN})
   end.
+
+pretty_args(A,_) when is_integer(A) -> flat("/~p",[A]);
+pretty_args(T,D) -> 
+  "["++R = flat("~P",[T,D]),
+  "]"++S = lists:reverse("("++R),
+  lists:reverse(")"++S).
 
 fix_ts(MS,TS) ->
   case MS of
