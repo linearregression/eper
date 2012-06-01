@@ -29,6 +29,7 @@
              , target       = node()       % target node
              , cookie       = ''           % target node cookie
              , buffered     = no           % output buffering
+             , blocking     = false        % run blocking; return a list of msgs
              , arity        = false        % arity instead of args
              , print_calls  = true         % print calls
              , print_file   = ""           % file to print to (standard_io)
@@ -176,7 +177,7 @@ start(Trc,Props) when is_list(Props) ->
       try
         register(redbug, spawn(fun init/0)),
         redbug ! {start,Cnf},
-        ok
+        maybe_block(Cnf)
       catch
         C:R -> {oops,{C,R}}
       end;
@@ -185,6 +186,8 @@ start(Trc,Props) when is_list(Props) ->
 
 assert_cookie(#cnf{cookie=''}) -> ok;
 assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
+
+maybe_block(#cnf{blocking=false}) -> ok.
 
 %% turn the proplist inta a #cnf{}
 make_cnf(Trc,Props) ->
