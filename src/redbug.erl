@@ -142,6 +142,16 @@ is_in_shell() ->
   {_,{x,S}} = (catch erlang:error(x)),
   element(1,hd(lists:reverse(S))) == shell.
 
+to_term("_") -> '_';
+to_term(Str) ->
+  {done, {ok, Toks, 1}, []} = erl_scan:tokens([], "["++Str++"]. ", 1),
+  case erl_parse:parse_term(Toks) of
+    {ok, [Term]} -> Term;
+    {ok, L} when is_list(L) -> L
+  end.
+
+to_int(L) -> list_to_integer(L).
+to_atom(L) -> list_to_atom(L).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% API from erlang shell
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -322,11 +332,12 @@ fix_ts(MS,TS) ->
     false-> ts(TS)
   end.
 
-ts({H,M,S,_Us}) -> flat("~2.2.0w:~2.2.0w:~2.2.0w",[H,M,S]).
-ts_ms({H,M,S,Us}) -> flat("~2.2.0w:~2.2.0w:~2.2.0w.~3.3.0w",[H,M,S,Us div 1000]).
+ts({H,M,S,_Us}) ->
+  flat("~2.2.0w:~2.2.0w:~2.2.0w",[H,M,S]).
+ts_ms({H,M,S,Us}) ->
+  flat("~2.2.0w:~2.2.0w:~2.2.0w.~3.3.0w",[H,M,S,Us div 1000]).
 
 flat(Form,List) -> flatten(io_lib:fwrite(Form,List)).
-
 
 %%% call stack handler
 stak(Bin) ->
@@ -451,15 +462,4 @@ print_loop(PrintFun) ->
     {'DOWN',_,_,_,R} -> io:fwrite("quitting: ~p~n",[R]);
     X -> PrintFun(X),
          print_loop(PrintFun)
-  end.
-
-to_int(L) -> list_to_integer(L).
-to_atom(L) -> list_to_atom(L).
-
-to_term("_") -> '_';
-to_term(Str) ->
-  {done, {ok, Toks, 1}, []} = erl_scan:tokens([], "["++Str++"]. ", 1),
-  case erl_parse:parse_term(Toks) of
-    {ok, [Term]} -> Term;
-    {ok, L} when is_list(L) -> L
   end.
