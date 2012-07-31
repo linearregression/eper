@@ -44,6 +44,7 @@
              , file_count   = 8            % number of files in wrap log
 
              , trc          = []           % cannot be set by user
+             , shell_pid    = []           % cannot be set by user
              , print_pid    = []           % cannot be set by user
              , trc_pid      = []           % cannot be set by user
              , cons_pid     = []           % cannot be set by user
@@ -172,7 +173,7 @@ start(Trc,{Tag,Val})                   -> start(Trc, [{Tag,Val}]);
 start(Trc,Props) when is_list(Props) ->
   case whereis(redbug) of
     undefined ->
-      Cnf = make_cnf(Trc,Props),
+      Cnf = make_cnf(Trc,[{shell_pid,self()}|Props]),
       assert_cookie(Cnf),
       try
         register(redbug, spawn(fun init/0)),
