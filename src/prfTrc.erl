@@ -12,7 +12,6 @@
 %% internal
 -export([active/1,idle/0,wait_for_local/1]).
 
--import(lists,[reverse/1,foreach/2,map/2]).
 -import(dict,[fetch/2
               , store/3
               , from_list/1]).
@@ -63,7 +62,8 @@ init() ->
 
 idle() ->
   receive
-    {start,{HostPid,Conf}} -> ?ACTIVE(start_trace(HostPid,Conf));
+    {start,{HostPid,Conf}} -> link(HostPid),
+                              ?ACTIVE(start_trace(HostPid,Conf));
     {stop,{HostPid,_}}     -> HostPid ! {prfTrc,{not_started,idle,self()}},
                               ?IDLE();
     {'EXIT',_,exiting}     -> ?IDLE();
@@ -132,16 +132,21 @@ is_message_trace(Flags) ->
 
 start_trace(LD) ->
   Conf = fetch(conf,LD),
-  HostPid = fetch(host_pid,LD),
-  link(HostPid),
+  Ps = [mk_prc(P) || P <- fetch(procs,Conf)],
+  Rtps = fetch(rtps,Conf),
   Consumer = consumer(fetch(where,Conf),fetch(time,Conf)),
-  HostPid ! {prfTrc,{starting,self(),Consumer}},
-  Procs = mk_prc(fetch(procs,Conf)),
+  fetch(host_pid,LD) ! {prfTrc,{starting,self(),Consumer}},
   Flags = [{tracer,real_consumer(Consumer)}|fetch(flags,Conf)],
   unset_tps(),
-  erlang:trace(Procs,true,Flags),
+  case 0 < lists:sum([erlang:trace(P,true,Flags) || P <- Ps]) of
+    true -> ok;
+    false-> exit({no_such_processes,Ps})
+  end,
   untrace(family(redbug)++family(prfTrc),Flags),
-  set_tps(fetch(rtps,Conf)),
+  case 0 < set_tps(Rtps) of
+    true -> ok;
+    false-> exit({no_matching_functions,Rtps})
+  end,
   store(consumer,Consumer,LD).
 
 family(Daddy) ->
@@ -163,10 +168,10 @@ unset_tps() ->
   erlang:trace_pattern({'_','_','_'},false,[global]).
 
 set_tps(TPs) ->
-  foreach(fun set_tps_f/1,TPs).
+  lists:foldl(fun set_tps_f/2,0,TPs).
 
-set_tps_f({MFA,MatchSpec,Flags}) ->
-  erlang:trace_pattern(MFA,MatchSpec,Flags).
+set_tps_f({MFA,MatchSpec,Flags},A) ->
+  A+erlang:trace_pattern(MFA,MatchSpec,Flags).
 
 mk_prc(all) -> all;
 mk_prc(Pid) when is_pid(Pid) -> Pid;
@@ -352,7 +357,8 @@ maybe_exit_args(_,_) ->
 send_one(LD,Msg) -> LD#ld.where ! [msg(Msg)].
 
 flush(_,no) -> ok;
-flush(LD,Buffer) -> LD#ld.where ! map(fun msg/1, reverse(Buffer)).
+flush(LD,Buffer) ->
+  LD#ld.where ! lists:map(fun msg/1,lists:reverse(Buffer)).
 
 msg({'send',Pid,TS,{Msg,To}})          -> {'send',{Msg,pi(To)},pi(Pid),ts(TS)};
 msg({'receive',Pid,TS,Msg})            -> {'recv',Msg,         pi(Pid),ts(TS)};
@@ -376,7 +382,7 @@ pi(P) when is_pid(P) ->
 pi(P) when is_port(P) ->
   {name,N} = erlang:port_info(P,name),
   [Hd|_] = string:tokens(N," "),
-  reverse(hd(string:tokens(reverse(Hd),"/")));
+  lists:reverse(hd(string:tokens(lists:reverse(Hd),"/")));
 pi(R) when is_atom(R) -> R;
 pi({R,Node}) when is_atom(R), Node == node() -> R;
 pi({R, Node}) when is_atom(R), is_atom(Node) -> {R, Node}.
