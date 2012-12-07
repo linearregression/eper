@@ -130,11 +130,11 @@ is_message_trace(Flags) ->
 
 start_trace(LD) ->
   Conf = fetch(conf,LD),
+  Consumer = consumer(fetch(where,Conf),fetch(time,Conf)),
+  fetch(host_pid,LD) ! {prfTrc,{starting,self(),Consumer}},
   Ps = [mk_prc(P) || P <- fetch(procs,Conf)],
   Rtps = fetch(rtps,Conf),
-  Consumer = consumer(fetch(where,Conf),fetch(time,Conf)),
   Flags = [{tracer,real_consumer(Consumer)}|fetch(flags,Conf)],
-  fetch(host_pid,LD) ! {prfTrc,{starting,self(),Consumer}},
   unset_tps(),
   case 0 < lists:sum([erlang:trace(P,true,Flags) || P <- Ps]) of
     true -> ok;
@@ -143,7 +143,7 @@ start_trace(LD) ->
   untrace(family(redbug)++family(prfTrc),Flags),
   case 0 < set_tps(Rtps) of
     true -> ok;
-    false-> exit({no_matching_functions,Rtps})
+    false-> exit(no_matching_functions)
   end,
   store(consumer,Consumer,LD).
 
@@ -171,13 +171,19 @@ set_tps(TPs) ->
 set_tps_f({MFA,MatchSpec,Flags},A) ->
   A+erlang:trace_pattern(MFA,MatchSpec,Flags).
 
-mk_prc(all) -> all;
-mk_prc(Pid) when is_pid(Pid) -> Pid;
-mk_prc({pid,P1,P2}) when is_integer(P1), is_integer(P2) -> c:pid(0,P1,P2);
+mk_prc(all) ->
+  all;
 mk_prc(Reg) when is_atom(Reg) ->
   case whereis(Reg) of
-    undefined -> exit({no_such_process, Reg});
-    Pid when is_pid(Pid) -> Pid
+    Pid when is_pid(Pid) -> mk_prc(Pid);
+    undefined -> exit({no_such_process,Reg})
+  end;
+mk_prc({pid,P1,P2}) when is_integer(P1), is_integer(P2) ->
+  mk_prc(c:pid(0,P1,P2));
+mk_prc(Pid) when is_pid(Pid) ->
+  case is_process_alive(Pid) of
+    true -> Pid;
+    false-> exit({no_such_process,Pid})
   end.
 
 real_consumer(C) ->
