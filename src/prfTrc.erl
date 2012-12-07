@@ -16,8 +16,6 @@
               , store/3
               , from_list/1]).
 
-%-define(bla,erlang:display(process_info(self(),current_function))).
-
 %% states
 -define(ACTIVE         , ?MODULE:active).
 -define(IDLE           , ?MODULE:idle).
@@ -135,8 +133,8 @@ start_trace(LD) ->
   Ps = [mk_prc(P) || P <- fetch(procs,Conf)],
   Rtps = fetch(rtps,Conf),
   Consumer = consumer(fetch(where,Conf),fetch(time,Conf)),
-  fetch(host_pid,LD) ! {prfTrc,{starting,self(),Consumer}},
   Flags = [{tracer,real_consumer(Consumer)}|fetch(flags,Conf)],
+  fetch(host_pid,LD) ! {prfTrc,{starting,self(),Consumer}},
   unset_tps(),
   case 0 < lists:sum([erlang:trace(P,true,Flags) || P <- Ps]) of
     true -> ok;
