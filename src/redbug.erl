@@ -25,7 +25,7 @@
 %% most can be set in the input proplist
 -record(cnf,{time         = 15000          % stop trace after this time [ms]
              , msgs         = 10           % stop trace after this # msgs [unit]
-             , proc         = all          % list of procs (or 'all')
+             , procs        = all          % list of procs (or 'all')
              , target       = node()       % target node
              , cookie       = ''           % target node cookie
              , blocking     = false        % run blocking; return a list of msgs
@@ -42,6 +42,7 @@
              , file         = ""           % file to write trace msgs to
              , file_size    = 1            % file size (per file [Mb])
              , file_count   = 8            % number of files in wrap log
+             , debug        = false        % big error messages
 
              , trc          = []           % cannot be set by user
              , shell_pid    = []           % cannot be set by user
@@ -89,7 +90,7 @@ help() ->
            , "  general opts:"
            , "time         (15000)       stop trace after this many ms"
            , "msgs         (10)          stop trace after this many msgs"
-           , "proc         (all)         (list of) Erlang process(es)"
+           , "procs        (all)         (list of) Erlang process(es)"
            , "                           all|pid()|atom(RegName)|{pid,I2,I3}"
            , "target       (node())      node to trace on"
            , "arity        (false)       print arity instead of arg list"
@@ -118,7 +119,7 @@ unix([Node,Time,Msgs,Trc,Proc]) ->
     Cnf = #cnf{time = to_int(Time),
                msgs   = to_int(Msgs),
                trc    = try to_term(Trc) catch _:_ -> Trc end,
-               proc   = to_atom(Proc),
+               procs  = [to_atom(Proc)],
                target = to_atom(Node)},
     self() ! {start,Cnf},
     init(),
@@ -212,7 +213,14 @@ init() ->
       try
         starting(do_start(Cnf))
       catch
-        C:R -> ?log([{C,R},{stack,erlang:get_stacktrace()}])
+        R ->
+          erlang:display({argument_error,R});
+        C:R ->
+          case {Cnf#cnf.debug,R} of
+            {false,{X,Y,_}} -> erlang:display({X,Y});
+            _               -> ?log([{C,R},{stack,erlang:get_stacktrace()}])
+
+          end
       end
   end,
   exit(exiting).
@@ -233,7 +241,8 @@ running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}}),
                    stopping(Cnf);
     {prfTrc,{stopping,_,_}}         -> stopping(Cnf);
-    {'EXIT',TrcPid,_}               -> stopping(Cnf);
+    {'EXIT',TrcPid,R}               -> ?log({trace_control_died,R}),
+                                       stopping(Cnf);
     {prfTrc,{not_started,R,TrcPid}} -> ?log([{not_started,R}]);
     {'EXIT',PrintPid,_}             -> maybe_stopping(Cnf);
     X                               -> ?log([{unknown_message,X}])
@@ -283,7 +292,7 @@ mk_outer(#cnf{print_depth=Depth,print_msec=MS} = Cnf) ->
       case {Tag,Data} of
         {'call',{MFA,Bin}} ->
           case Cnf#cnf.print_calls of
-            true -> 
+            true ->
               OutFun("~n~s <~p> ~P",[MTS,PI,MFA,Depth]),
               foreach(fun(L)->OutFun("  ~s",[L]) end, stak(Bin));
             false->
@@ -311,7 +320,7 @@ get_fd("") -> standard_io;
 get_fd(FN) ->
   case file:open(FN,[write]) of
     {ok,FD} -> FD;
-    _ -> exit({cannot_open,FN})
+    _ -> throw({cannot_open,FN})
   end.
 
 fix_ts(MS,TS) ->
@@ -366,8 +375,12 @@ pack(Cnf) ->
   dict:from_list([{time,chk_time(Cnf#cnf.time)},
                   {flags,[call,timestamp|maybe_arity(Cnf,Flags)]},
                   {rtps,RTPs},
-                  {procs,chk_proc(Cnf#cnf.proc)},
+                  {procs,[chk_proc(P) || P <- mk_list(Cnf#cnf.procs)]},
                   {where,where(Cnf)}]).
+
+mk_list([]) -> throw(no_procs);
+mk_list([_|_] = L) -> L;
+mk_list(E) -> [E].
 
 where(Cnf) ->
   case Cnf#cnf.file of
@@ -389,7 +402,7 @@ maybe_arity(#cnf{arity=true},Flags) -> [arity|Flags];
 maybe_arity(_,Flags)                -> Flags.
 
 chk_time(Time) when is_integer(Time) -> Time;
-chk_time(X) -> exit({bad_time,X}).
+chk_time(X) -> throw({bad_time,X}).
 
 chk_buffered(true)  -> term_buffer;
 chk_buffered(false) -> term_stream.
@@ -397,10 +410,10 @@ chk_buffered(false) -> term_stream.
 chk_proc(Pid) when is_pid(Pid) -> Pid;
 chk_proc(Atom) when is_atom(Atom)-> Atom;
 chk_proc({pid,I1,I2}) when is_integer(I1), is_integer(I2) -> {pid,I1,I2};
-chk_proc(X) -> exit({bad_proc,X}).
+chk_proc(X) -> throw({bad_proc,X}).
 
 chk_msgs(Msgs) when is_integer(Msgs) -> Msgs;
-chk_msgs(X) -> exit({bad_msgs,X}).
+chk_msgs(X) -> throw({bad_msgs,X}).
 
 -define(is_string(Str), (Str=="" orelse (9=<hd(Str) andalso hd(Str)=<255))).
 
@@ -409,7 +422,7 @@ chk_trc('receive',{Flags,RTPs})                -> {['receive'|Flags],RTPs};
 chk_trc('arity',{Flags,RTPs})                  -> {['arity'|Flags],RTPs};
 chk_trc(RTP,{Flags,RTPs}) when ?is_string(RTP) -> {Flags,[chk_rtp(RTP)|RTPs]};
 chk_trc(RTP,{Flags,RTPs}) when is_tuple(RTP)   -> {Flags,[chk_rtp(RTP)|RTPs]};
-chk_trc(X,_)                                   -> exit({bad_trc,X}).
+chk_trc(X,_)                                   -> throw({bad_trc,X}).
 
 -define(is_aal(M,F,MS), is_atom(M),is_atom(F),is_list(MS)).
 
@@ -417,9 +430,9 @@ chk_rtp(Str) when ?is_string(Str)      -> redbug_msc:transform(Str);
 chk_rtp({M})                           -> chk_rtp({M,'_',[]});
 chk_rtp({M,F}) when is_atom(F)         -> chk_rtp({M,F,[]});
 chk_rtp({M,L}) when is_list(L)         -> chk_rtp({M,'_',L});
-chk_rtp({'_',_,_})                     -> exit(dont_wildcard_module);
+chk_rtp({'_',_,_})                     -> throw(dont_wildcard_module);
 chk_rtp({M,F,MS}) when ?is_aal(M,F,MS) -> {{M,F,'_'},ms(MS),[local]};
-chk_rtp(X)                             -> exit({bad_rtp,X}).
+chk_rtp(X)                             -> throw({bad_rtp,X}).
 
 ms(MS) -> foldl(fun msf/2, [{'_',[],[]}], MS).
 
@@ -428,7 +441,7 @@ msf(return,[{Head,Cond,Body}])-> [{Head,Cond,[{return_trace}|Body]}];
 msf(Ari, [{_,Cond,Body}]) when is_integer(Ari)-> [{mk_head(Ari),Cond,Body}];
 msf({Head,Cond},[{_,_,Body}]) when is_tuple(Head)->[{Head,slist(Cond),Body}];
 msf(Head, [{_,Cond,Body}]) when is_tuple(Head)-> [{Head,Cond,Body}];
-msf(X,_) -> exit({bad_match_spec,X}).
+msf(X,_) -> throw({bad_match_spec,X}).
 
 mk_head(N) -> erlang:make_tuple(N,'_').
 
