@@ -64,7 +64,7 @@ idle() ->
                               ?ACTIVE(start_trace(HostPid,Conf));
     {stop,{HostPid,_}}     -> HostPid ! {prfTrc,{not_started,idle,self()}},
                               ?IDLE();
-    {'EXIT',_,exiting}     -> ?IDLE();
+    {'EXIT',_,normal}      -> ?IDLE();
     X                      -> ?log({weird_in,X}), ?IDLE()
   end.
 
@@ -105,7 +105,7 @@ stop_trace(LD) ->
 start_trace(HostPid,Conf) ->
   case {maybe_load_rtps(fetch(rtps,Conf)),
         is_message_trace(fetch(flags,Conf))} of
-    {[],false}-> exit({prfTrc,no_modules});
+    {[],false}-> exit({prfTrc,no_matching_modules});
     {Rtps,_}  -> start_trace(from_list([{host_pid,HostPid},
                                         {conf,store(rtps,Rtps,Conf)}]))
   end.

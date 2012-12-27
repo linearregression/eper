@@ -217,19 +217,18 @@ init() ->
         R ->
           erlang:display({argument_error,R});
         C:R ->
-          case {Cnf#cnf.debug,R} of
-            {false,{X,Y,_}} -> erlang:display({X,Y});
-            _               -> ?log([{C,R},{stack,erlang:get_stacktrace()}])
-
+          case Cnf#cnf.debug of
+            false-> erlang:display(R);
+            true -> ?log([{C,R},{stack,erlang:get_stacktrace()}])
           end
       end
-  end,
-  exit(exiting).
+  end.
 
 starting(Cnf = #cnf{print_pid=PrintPid}) ->
   receive
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}});
     {prfTrc,{starting,T,C}}      -> running(Cnf#cnf{trc_pid=T,cons_pid=C});
+    {'EXIT',_,{prfTrc,R}}        -> throw(R);
     {prfTrc,{already_started,_}} -> ?log(already_started);
     {'EXIT',PrintPid,R}          -> ?log([printer_died,{reason,R}]);
     {'EXIT',R}                   -> ?log([exited,{reason,R}]);
@@ -238,6 +237,7 @@ starting(Cnf = #cnf{print_pid=PrintPid}) ->
 
 running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
   Cnf#cnf.print_pid ! {trace_consumer,Cnf#cnf.cons_pid},
+  Cnf#cnf.shell_pid ! running,
   receive
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}}),
                    stopping(Cnf);
