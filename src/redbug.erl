@@ -183,7 +183,8 @@ start(Trc,Props) when is_list(Props) ->
       catch
         C:R -> {oops,{C,R}}
       end;
-    _ -> redbug_already_started
+    _ ->
+      redbug_already_started
   end.
 
 assert_cookie(#cnf{cookie=''}) -> ok;
