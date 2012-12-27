@@ -174,13 +174,14 @@ start(Trc,{Tag,Val})                   -> start(Trc, [{Tag,Val}]);
 start(Trc,Props) when is_list(Props) ->
   case whereis(redbug) of
     undefined ->
-      Cnf = make_cnf(Trc,[{shell_pid,self()}|Props]),
-      assert_cookie(Cnf),
       try
+        Cnf = make_cnf(Trc,[{shell_pid,self()}|Props]),
+        assert_cookie(Cnf),
         register(redbug, spawn(fun init/0)),
         redbug ! {start,Cnf},
         maybe_block(Cnf)
       catch
+        R   -> R;
         C:R -> {oops,{C,R}}
       end;
     _ ->
@@ -190,7 +191,12 @@ start(Trc,Props) when is_list(Props) ->
 assert_cookie(#cnf{cookie=''}) -> ok;
 assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
 
-maybe_block(#cnf{blocking=false}) -> ok.
+maybe_block(#cnf{blocking=false}) ->
+  Ref = erlang:monitor(process,redbug),
+  receive
+    running            -> erlang:demonitor(Ref,[flush]),ok;
+    {'DOWN',Ref,_,_,R} -> R
+  end.
 
 %% turn the proplist inta a #cnf{}
 make_cnf(Trc,Props) ->
@@ -200,7 +206,7 @@ make_cnf([],Cnf,_) -> Cnf;
 make_cnf([{Tag,Val}|Props],Cnf,Tags) ->
   make_cnf(Props,setelement(findex(Tag,Tags)+1,Cnf,Val),Tags).
 
-findex(Tag,[])       -> exit({field_not_allowed,Tag});
+findex(Tag,[])       -> throw({no_such_option,Tag});
 findex(Tag,[Tag|_])  -> 1;
 findex(Tag,[_|Tags]) -> findex(Tag,Tags)+1.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -215,12 +221,13 @@ init() ->
         starting(do_start(Cnf))
       catch
         R ->
-          erlang:display({argument_error,R});
+          exit({argument_error,R});
         C:R ->
           case Cnf#cnf.debug of
-            false-> erlang:display(R);
+            false-> ok;
             true -> ?log([{C,R},{stack,erlang:get_stacktrace()}])
-          end
+          end,
+          exit(R)
       end
   end.
 
