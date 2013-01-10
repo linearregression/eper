@@ -178,7 +178,7 @@ start(Trc,Props) when is_list(Props) ->
         assert_cookie(Cnf),
         register(redbug, spawn(fun init/0)),
         redbug ! {start,Cnf},
-        maybe_block(Cnf)
+        maybe_block(Cnf,block_a_little())
       catch
         R   -> R;
         C:R -> {oops,{C,R}}
@@ -190,12 +190,18 @@ start(Trc,Props) when is_list(Props) ->
 assert_cookie(#cnf{cookie=''}) -> ok;
 assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
 
-maybe_block(#cnf{blocking=false}) ->
+block_a_little() ->
   Ref = erlang:monitor(process,redbug),
   receive
     running            -> erlang:demonitor(Ref,[flush]),ok;
     {'DOWN',Ref,_,_,R} -> R
   end.
+
+maybe_block(#cnf{blocking=true},ok) -> block();
+maybe_block(_,R) -> R.
+
+block() ->
+  ok.
 
 %% turn the proplist inta a #cnf{}
 make_cnf(Trc,Props) ->
