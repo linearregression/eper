@@ -257,7 +257,8 @@ running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
     {'EXIT',TrcPid,R}               -> ?log({trace_control_died,R}),
                                        stopping(Cnf);
     {prfTrc,{not_started,R,TrcPid}} -> ?log([{not_started,R}]);
-    {'EXIT',PrintPid,_}             -> maybe_stopping(Cnf);
+    {'EXIT',PrintPid,R}             -> ?log([printer_died,{reason,R}]),
+                                       maybe_stopping(Cnf);
     X                               -> ?log([{unknown_message,X}])
   end.
 
@@ -270,13 +271,13 @@ maybe_stopping(#cnf{trc_pid=TrcPid}) ->
 
 stopping(#cnf{print_pid=PrintPid}) ->
   receive
-    {'EXIT',PrintPid,_} -> ok;
-    X                   -> ?log([{unknown_message,X}])
+    {'EXIT',PrintPid,{R,_}} -> io:fwrite("redbug done, ~p~n",[R]);
+    X                       -> ?log([{unknown_message,X}])
   end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 do_start(OCnf) ->
-  Cnf = spawn_printer(assert_print_fun(maybe_new_target(OCnf))),
+  Cnf = spawn_printer(mk_print_fun(OCnf),maybe_new_target(OCnf)),
   prf:start(prf_redbug,Cnf#cnf.target,redbugConsumer),
   prf:config(prf_redbug,prfTrc,{start,{self(),pack(Cnf)}}),
   Cnf.
@@ -287,14 +288,18 @@ maybe_new_target(Cnf = #cnf{target=Target}) ->
     false-> Cnf#cnf{target=to_atom(Str++"@"++element(2,inet:gethostname()))}
   end.
 
-assert_print_fun(Cnf) -> Cnf#cnf{print_fun=mk_print_fun(Cnf)}.
+spawn_printer(PrintFun,Cnf) ->
+  Cnf#cnf{print_pid=spawn_link(fun() -> print_init(PrintFun) end)}.
 
-spawn_printer(Cnf) ->
-  F = fun() -> print_init(fun(Ms) -> foreach(Cnf#cnf.print_fun,Ms) end) end,
-  Cnf#cnf{print_pid=spawn_link(F)}.
-
-mk_print_fun(#cnf{print_fun=PF}) when is_function(PF) -> PF;
-mk_print_fun(Cnf)                                     -> mk_outer(Cnf).
+mk_print_fun(Cnf = #cnf{print_fun=PF}) ->
+  case is_function(PF) of
+    false-> F = mk_outer(Cnf), fun(Ms,_) -> lists:foreach(F,Ms) end;
+    true ->
+      case erlang:fun_info(PF,arity) of
+        {arity,1} -> fun(Ms,_) -> lists:foreach(PF,Ms) end;
+        {arity,2} -> PF
+      end
+  end.
 
 mk_outer(#cnf{file=[_|_]}) ->
   fun(_) -> ok end;
@@ -468,14 +473,13 @@ print_init(PrintFun) ->
   receive
     {trace_consumer,TC} ->
       erlang:monitor(process,TC),
-      print_loop(PrintFun)
+      print_loop(PrintFun,[])
   end.
 
-print_loop(PrintFun) ->
+print_loop(PrintFun,Acc) ->
   receive
-    {'DOWN',_,_,_,R} -> io:fwrite("quitting: ~p~n",[R]);
-    X -> PrintFun(X),
-         print_loop(PrintFun)
+    {'DOWN',_,_,_,R} -> exit({R,Acc});
+    X -> print_loop(PrintFun,PrintFun(X,Acc))
   end.
 
 to_int(L) -> list_to_integer(L).
