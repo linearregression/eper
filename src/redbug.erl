@@ -15,8 +15,6 @@
 -export([start/1,start/2,start/3,start/4,start/5]).
 -export([stop/0]).
 
--import(lists,[foldl/3,usort/1,reverse/1,foreach/2,flatten/1]).
-
 -include("log.hrl").
 
 %-define(bla,erlang:display(process_info(self(),current_function))).
@@ -54,61 +52,62 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 help() ->
-  foreach(fun(S)->io:fwrite(standard_io,"~s~n",[S])end,
-          ["redbug - the (sensibly) Restrictive Debugger"
-           , ""
-           , "  redbug:start(Trc) -> start(Trc,[])."
-           , "  redbug:start(Trc,Opts)."
-           , ""
-           , "  redbug is a tool to interact with the Erlang trace facility."
-           , "  It will instruct the Erlang VM to generate so called "
-           , "  'trace messages' when certain events (such as a particular"
-           , "  function being called) occur."
-           , "  The trace messages are either printed (i.e. human readable)"
-           , "  to a file or to the screen; or written to a trc file."
-           , "  Using a trc file puts less stress on the system, but"
-           , "  there is no way to count the messages (so the msgs opt"
-           , "  is ignored), and the files can only be read by special tools"
-           , "  (such as 'bread'). Printing and trc files cannot be combined."
-           , "  By default (i.e. if the 'file' opt is not given), messages"
-           , "  are printed."
-           , ""
-           , "Trc: list('send'|'receive'|string(RTP))"
-           , "RTP:  restricted trace pattern"
-           , "  the RTP has the form: \"<mfa> when <guards> -> <actions>\""
-           , "  where <mfa> can be;"
-           , "  \"mod\", \"mod:fun\", \"mod:fun/3\" or \"mod:fun('_',atom,X)\""
-           , "  <guard> is something like;"
-           , "  \"X==1\" or \"is_atom(A)\""
-           , "  and <action> is;"
-           , "  \"return\" and/or \"stack\" (separated by \";\")"
-           , ""
-           , "  E.g."
-           , "  ets:lookup(T,hostname) when is_integer(T) ->stack"
-           , ""
-           , "Opts: list({Opt,Val})"
-           , "  general opts:"
-           , "time         (15000)       stop trace after this many ms"
-           , "msgs         (10)          stop trace after this many msgs"
-           , "procs        (all)         (list of) Erlang process(es)"
-           , "                           all|pid()|atom(RegName)|{pid,I2,I3}"
-           , "target       (node())      node to trace on"
-           , "arity        (false)       print arity instead of arg list"
-           , "  print-related opts"
-           , "max_queue    (5000)        fail if internal queue gets this long"
-           , "max_msg_size (50000)       fail if seeing a msg this big"
-           , "buffered     (no)          buffer messages till end of trace"
-           , "print_calls  (true)        print calls"
-           , "print_file   (standard_io) print to this file"
-           , "print_msec   (false)       print milliseconds on timestamps"
-           , "print_depth  (999999)      formatting depth for \"~P\""
-           , "print_re     (\"\")          print only strings that match this"
-           , "  trc file related opts"
-           , "file         (none)        use a trc file based on this name"
-           , "file_size    (1)           size of each trc file"
-           , "file_count   (8)           number of trc files"
-           , ""
-          ]).
+  Text = 
+    ["redbug - the (sensibly) Restrictive Debugger"
+     , ""
+     , "  redbug:start(Trc) -> start(Trc,[])."
+     , "  redbug:start(Trc,Opts)."
+     , ""
+     , "  redbug is a tool to interact with the Erlang trace facility."
+     , "  It will instruct the Erlang VM to generate so called "
+     , "  'trace messages' when certain events (such as a particular"
+     , "  function being called) occur."
+     , "  The trace messages are either printed (i.e. human readable)"
+     , "  to a file or to the screen; or written to a trc file."
+     , "  Using a trc file puts less stress on the system, but"
+     , "  there is no way to count the messages (so the msgs opt"
+     , "  is ignored), and the files can only be read by special tools"
+     , "  (such as 'bread'). Printing and trc files cannot be combined."
+     , "  By default (i.e. if the 'file' opt is not given), messages"
+     , "  are printed."
+     , ""
+     , "Trc: list('send'|'receive'|string(RTP))"
+     , "RTP:  restricted trace pattern"
+     , "  the RTP has the form: \"<mfa> when <guards> -> <actions>\""
+     , "  where <mfa> can be;"
+     , "  \"mod\", \"mod:fun\", \"mod:fun/3\" or \"mod:fun('_',atom,X)\""
+     , "  <guard> is something like;"
+     , "  \"X==1\" or \"is_atom(A)\""
+     , "  and <action> is;"
+     , "  \"return\" and/or \"stack\" (separated by \";\")"
+     , ""
+     , "  E.g."
+     , "  ets:lookup(T,hostname) when is_integer(T) ->stack"
+     , ""
+     , "Opts: list({Opt,Val})"
+     , "  general opts:"
+     , "time         (15000)       stop trace after this many ms"
+     , "msgs         (10)          stop trace after this many msgs"
+     , "procs        (all)         (list of) Erlang process(es)"
+     , "                           all|pid()|atom(RegName)|{pid,I2,I3}"
+     , "target       (node())      node to trace on"
+     , "arity        (false)       print arity instead of arg list"
+     , "  print-related opts"
+     , "max_queue    (5000)        fail if internal queue gets this long"
+     , "max_msg_size (50000)       fail if seeing a msg this big"
+     , "buffered     (no)          buffer messages till end of trace"
+     , "print_calls  (true)        print calls"
+     , "print_file   (standard_io) print to this file"
+     , "print_msec   (false)       print milliseconds on timestamps"
+     , "print_depth  (999999)      formatting depth for \"~P\""
+     , "print_re     (\"\")          print only strings that match this"
+     , "  trc file related opts"
+     , "file         (none)        use a trc file based on this name"
+     , "file_size    (1)           size of each trc file"
+     , "file_count   (8)           number of trc files"
+     , ""
+    ],
+  lists:foreach(fun(S)->io:fwrite(standard_io,"~s~n",[S])end,Text).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% start from unix shell (e.g. the bin/redbug script)
@@ -302,7 +301,7 @@ mk_outer(#cnf{print_depth=Depth,print_msec=MS} = Cnf) ->
           case Cnf#cnf.print_calls of
             true ->
               OutFun("~n~s <~p> ~P",[MTS,PI,MFA,Depth]),
-              foreach(fun(L)->OutFun("  ~s",[L]) end, stak(Bin));
+              lists:foreach(fun(L)->OutFun("  ~s",[L]) end, stak(Bin));
             false->
               ok
           end;
@@ -340,15 +339,16 @@ fix_ts(MS,TS) ->
 ts({H,M,S,_Us}) -> flat("~2.2.0w:~2.2.0w:~2.2.0w",[H,M,S]).
 ts_ms({H,M,S,Us}) -> flat("~2.2.0w:~2.2.0w:~2.2.0w.~3.3.0w",[H,M,S,Us div 1000]).
 
-flat(Form,List) -> flatten(io_lib:fwrite(Form,List)).
+flat(Form,List) -> 
+  lists:flatten(io_lib:fwrite(Form,List)).
 
 
 %%% call stack handler
 stak(Bin) ->
-  foldl(fun munge/2,[],string:tokens(binary_to_list(Bin),"\n")).
+  lists:foldl(fun munge/2,[],string:tokens(binary_to_list(Bin),"\n")).
 
 munge(I,Out) ->
-  case reverse(I) of
+  case lists:reverse(I) of
     "..."++_ -> [truncated|Out];
     _ ->
       case string:str(I, "Return addr") of
@@ -379,7 +379,7 @@ mfaf(I) ->
 %%%         {ip,Port,Queue}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 pack(Cnf) ->
-  {Flags,RTPs} = foldl(fun chk_trc/2,{[],[]},slist(Cnf#cnf.trc)),
+  {Flags,RTPs} = lists:foldl(fun chk_trc/2,{[],[]},slist(Cnf#cnf.trc)),
   dict:from_list([{time,chk_time(Cnf#cnf.time)},
                   {flags,[call,timestamp|maybe_arity(Cnf,Flags)]},
                   {rtps,RTPs},
@@ -442,7 +442,7 @@ chk_rtp({'_',_,_})                     -> throw(dont_wildcard_module);
 chk_rtp({M,F,MS}) when ?is_aal(M,F,MS) -> {{M,F,'_'},ms(MS),[local]};
 chk_rtp(X)                             -> throw({bad_rtp,X}).
 
-ms(MS) -> foldl(fun msf/2, [{'_',[],[]}], MS).
+ms(MS) -> lists:foldl(fun msf/2, [{'_',[],[]}], MS).
 
 msf(stack,[{Head,Cond,Body}]) -> [{Head,Cond,[{message,{process_dump}}|Body]}];
 msf(return,[{Head,Cond,Body}])-> [{Head,Cond,[{return_trace}|Body]}];
@@ -454,7 +454,7 @@ msf(X,_) -> throw({bad_match_spec,X}).
 mk_head(N) -> erlang:make_tuple(N,'_').
 
 slist(S) when ?is_string(S) -> [S];
-slist(L) when is_list(L) -> usort(L);
+slist(L) when is_list(L) -> lists:usort(L);
 slist(X) -> [X].
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
