@@ -197,9 +197,15 @@ start(Trc,Props) when is_list(Props) ->
 
 assert_print_fun(Cnf) ->
   case is_function(Cnf#cnf.print_fun) of
-    false-> Cnf#cnf{print_fun=mk_outer(Cnf)};
-    true -> Cnf
-end.
+    true -> Cnf;
+    false-> Cnf#cnf{print_fun=make_print_fun(Cnf)}
+  end.
+
+make_print_fun(Cnf) ->
+  case Cnf#cnf.blocking of
+    false-> mk_outer(Cnf);
+    true -> fun(X,0) -> [X]; (X,A) -> [X|A] end
+  end.
 
 assert_cookie(#cnf{cookie=''}) -> ok;
 assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
@@ -207,7 +213,7 @@ assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
 block_a_little() ->
   Ref = erlang:monitor(process,redbug),
   receive
-    running            -> erlang:demonitor(Ref,[flush]),ok;
+    running            -> erlang:demonitor(Ref),ok;
     {'DOWN',Ref,_,_,R} -> R
   end.
 
@@ -215,7 +221,10 @@ maybe_block(#cnf{blocking=true},ok) -> block();
 maybe_block(_,R) -> R.
 
 block() ->
-  ok.
+  Ref = erlang:monitor(process,redbug),
+  receive
+    {'DOWN',Ref,_,_,R} -> R
+  end.
 
 %% turn the proplist inta a #cnf{}
 make_cnf(Trc,Props) ->
@@ -271,26 +280,27 @@ running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
     {'EXIT',TrcPid,R}               -> ?log({trace_control_died,R}),
                                        stopping(Cnf);
     {prfTrc,{not_started,R,TrcPid}} -> ?log([{not_started,R}]);
-    {'EXIT',PrintPid,R}             -> done_message(R),
-                                       wait_for_trc(Cnf);
+    {'EXIT',PrintPid,R}             -> wait_for_trc(Cnf,R);
     X                               -> ?log([{unknown_message,X}])
   end.
 
-wait_for_trc(#cnf{trc_pid=TrcPid}) ->
+wait_for_trc(Cnf = #cnf{trc_pid=TrcPid},R) ->
   receive
-    {prfTrc,{stopping,_,_}} -> ok;
+    {prfTrc,{stopping,_,_}} -> done(Cnf,R);
     {'EXIT',TrcPid,R}       -> ?log({trace_control_died,R});
     X                       -> ?log({unknown_message,X})
   end.
 
-stopping(#cnf{print_pid=PrintPid}) ->
+stopping(Cnf = #cnf{print_pid=PrintPid}) ->
   receive
-    {'EXIT',PrintPid,R} -> done_message(R);
+    {'EXIT',PrintPid,R} -> done(Cnf,R);
     X                   -> ?log([{unknown_message,X}])
   end.
 
-done_message({R,A}) ->
-  io:fwrite("redbug done, ~p - ~p~n",[R,A]).
+done(#cnf{blocking=false},{R,A}) ->
+  io:fwrite("redbug done, ~p - ~p~n",[R,A]);
+done(#cnf{blocking=true},R) ->
+  exit(R).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 do_start(OCnf) ->
   Cnf = spawn_printer(wrap_print_fun(OCnf),maybe_new_target(OCnf)),
@@ -309,7 +319,7 @@ spawn_printer(PrintFun,Cnf) ->
 
 wrap_print_fun(#cnf{print_fun=PF}) ->
   case erlang:fun_info(PF,arity) of
-    {arity,1} -> fun(Ms,N) -> lists:foreach(PF,Ms),N+length(Ms) end;
+    {arity,1} -> fun(M,N) -> PF(M),N+1 end;
     {arity,2} -> PF
   end.
 
@@ -495,5 +505,5 @@ print_init(PrintFun) ->
 print_loop(PrintFun,Acc) ->
   receive
     {'DOWN',_,_,_,R} -> exit({R,Acc});
-    X                -> print_loop(PrintFun,PrintFun(X,Acc))
+    X                -> print_loop(PrintFun,lists:foldl(PrintFun,Acc,X))
   end.
