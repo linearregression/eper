@@ -182,7 +182,7 @@ start(Trc,Props) when is_list(Props) ->
   case whereis(redbug) of
     undefined ->
       try
-        Cnf = make_cnf(Trc,[{shell_pid,self()}|Props]),
+        Cnf = assert_print_fun(make_cnf(Trc,[{shell_pid,self()}|Props])),
         assert_cookie(Cnf),
         register(redbug, spawn(fun init/0)),
         redbug ! {start,Cnf},
@@ -194,6 +194,12 @@ start(Trc,Props) when is_list(Props) ->
     _ ->
       redbug_already_started
   end.
+
+assert_print_fun(Cnf) ->
+  case is_function(Cnf#cnf.print_fun) of
+    false-> Cnf#cnf{print_fun=mk_outer(Cnf)};
+    true -> Cnf
+end.
 
 assert_cookie(#cnf{cookie=''}) -> ok;
 assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
@@ -279,13 +285,13 @@ maybe_stopping(#cnf{trc_pid=TrcPid}) ->
 
 stopping(#cnf{print_pid=PrintPid}) ->
   receive
-    {'EXIT',PrintPid,{R,_}} -> io:fwrite("redbug done, ~p~n",[R]);
+    {'EXIT',PrintPid,{R,A}} -> io:fwrite("redbug done, ~p - ~p~n",[R,A]);
     X                       -> ?log([{unknown_message,X}])
   end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 do_start(OCnf) ->
-  Cnf = spawn_printer(mk_print_fun(OCnf),maybe_new_target(OCnf)),
+  Cnf = spawn_printer(wrap_print_fun(OCnf),maybe_new_target(OCnf)),
   prf:start(prf_redbug,Cnf#cnf.target,redbugConsumer),
   prf:config(prf_redbug,prfTrc,{start,{self(),pack(Cnf)}}),
   Cnf.
@@ -299,14 +305,10 @@ maybe_new_target(Cnf = #cnf{target=Target}) ->
 spawn_printer(PrintFun,Cnf) ->
   Cnf#cnf{print_pid=spawn_link(fun() -> print_init(PrintFun) end)}.
 
-mk_print_fun(Cnf = #cnf{print_fun=PF}) ->
-  case is_function(PF) of
-    false-> F = mk_outer(Cnf), fun(Ms,_) -> lists:foreach(F,Ms) end;
-    true ->
-      case erlang:fun_info(PF,arity) of
-        {arity,1} -> fun(Ms,_) -> lists:foreach(PF,Ms) end;
-        {arity,2} -> PF
-      end
+wrap_print_fun(#cnf{print_fun=PF}) ->
+  case erlang:fun_info(PF,arity) of
+    {arity,1} -> fun(Ms,N) -> lists:foreach(PF,Ms),N+length(Ms) end;
+    {arity,2} -> PF
   end.
 
 mk_outer(#cnf{file=[_|_]}) ->
@@ -476,19 +478,20 @@ slist(S) when ?is_string(S) -> [S];
 slist(L) when is_list(L) -> lists:usort(L);
 slist(X) -> [X].
 
+to_int(L) -> list_to_integer(L).
+to_atom(L) -> list_to_atom(L).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% the print_loop process
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 print_init(PrintFun) ->
   receive
     {trace_consumer,TC} ->
       erlang:monitor(process,TC),
-      print_loop(PrintFun,[])
+      print_loop(PrintFun,0)
   end.
 
 print_loop(PrintFun,Acc) ->
   receive
     {'DOWN',_,_,_,R} -> exit({R,Acc});
-    X -> print_loop(PrintFun,PrintFun(X,Acc))
+    X                -> print_loop(PrintFun,PrintFun(X,Acc))
   end.
-
-to_int(L) -> list_to_integer(L).
-to_atom(L) -> list_to_atom(L).
