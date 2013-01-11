@@ -271,24 +271,26 @@ running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
     {'EXIT',TrcPid,R}               -> ?log({trace_control_died,R}),
                                        stopping(Cnf);
     {prfTrc,{not_started,R,TrcPid}} -> ?log([{not_started,R}]);
-    {'EXIT',PrintPid,R}             -> ?log([printer_died,{reason,R}]),
-                                       maybe_stopping(Cnf);
+    {'EXIT',PrintPid,R}             -> done_message(R),
+                                       wait_for_trc(Cnf);
     X                               -> ?log([{unknown_message,X}])
   end.
 
-maybe_stopping(#cnf{trc_pid=TrcPid}) ->
+wait_for_trc(#cnf{trc_pid=TrcPid}) ->
   receive
     {prfTrc,{stopping,_,_}} -> ok;
-    {'EXIT',TrcPid,_}       -> ok;
+    {'EXIT',TrcPid,R}       -> ?log({trace_control_died,R});
     X                       -> ?log({unknown_message,X})
   end.
 
 stopping(#cnf{print_pid=PrintPid}) ->
   receive
-    {'EXIT',PrintPid,{R,A}} -> io:fwrite("redbug done, ~p - ~p~n",[R,A]);
-    X                       -> ?log([{unknown_message,X}])
+    {'EXIT',PrintPid,R} -> done_message(R);
+    X                   -> ?log([{unknown_message,X}])
   end.
 
+done_message({R,A}) ->
+  io:fwrite("redbug done, ~p - ~p~n",[R,A]).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 do_start(OCnf) ->
   Cnf = spawn_printer(wrap_print_fun(OCnf),maybe_new_target(OCnf)),
