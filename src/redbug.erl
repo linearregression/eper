@@ -134,6 +134,14 @@ unix(X) ->
   io:fwrite("bad args: ~p~n",[X]),
   maybe_halt(1).
 
+to_term("_") -> '_';
+to_term(Str) ->
+  {done, {ok, Toks, 1}, []} = erl_scan:tokens([], "["++Str++"]. ", 1),
+  case erl_parse:parse_term(Toks) of
+    {ok, [Term]} -> Term;
+    {ok, L} when is_list(L) -> L
+  end.
+
 maybe_halt(Status) ->
   case is_in_shell() of
     true -> ok;
@@ -484,11 +492,3 @@ print_loop(PrintFun,Acc) ->
 
 to_int(L) -> list_to_integer(L).
 to_atom(L) -> list_to_atom(L).
-
-to_term("_") -> '_';
-to_term(Str) ->
-  {done, {ok, Toks, 1}, []} = erl_scan:tokens([], "["++Str++"]. ", 1),
-  case erl_parse:parse_term(Toks) of
-    {ok, [Term]} -> Term;
-    {ok, L} when is_list(L) -> L
-  end.
