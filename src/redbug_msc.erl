@@ -226,6 +226,7 @@ actions_fun(Str) ->
 assert(Fun,Tag) ->
   try Fun()
   catch
+    _:{this_is_too_confusing,C}  -> exit({{syntax_error,C},Tag});
     _:{_,{error,{1,erl_parse,L}}}-> exit({{syntax_error,lists:flatten(L)},Tag});
     _:R                          -> exit({R,Tag,erlang:get_stacktrace()})
   end.
