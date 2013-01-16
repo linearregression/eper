@@ -1,3 +1,14 @@
+commit 836f424746f5234a32972e879896011bffc94bfe
+Author: mats cronqvist <masse@klarna.com>
+Date:   Wed Jan 16 13:31:38 2013 +0100
+
+    autogenerate AUTHORS and ChangeLog
+
+AUTHORS
+ChangeLog
+INSTALL
+Makefile
+
 commit 25471fee3fba64fdfd498aab2e201f146c3a6670
 Author: mats cronqvist <masse@klarna.com>
 Date:   Wed Jan 16 12:00:13 2013 +0100
