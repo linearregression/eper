@@ -113,20 +113,21 @@ help() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% start from unix shell (e.g. the bin/redbug script)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-unix([Node,Time,Msgs,Trc])      -> unix([Node,Time,Msgs,Trc,"all"]);
-unix([Node,Time,Msgs,Trc,Proc]) ->
+unix([Node,Trc])                -> unix([Node,Trc,"15000"]);
+unix([Node,Trc,Time])           -> unix([Node,Trc,Time,"10"]);
+unix([Node,Trc,Time,Msgs])      -> unix([Node,Trc,Time,Msgs,"all"]);
+unix([Node,Trc,Time,Msgs,Proc]) ->
   try
     Cnf = #cnf{time = to_int(Time),
                msgs   = to_int(Msgs),
                trc    = try to_term(Trc) catch _:_ -> Trc end,
                procs  = [to_atom(Proc)],
-               target = to_atom(Node)},
+               target = to_atom(Node),
+               print_fun = mk_outer(#cnf{})},
     self() ! {start,Cnf},
     init(),
     maybe_halt(0)
   catch
-    exit:exiting ->
-      maybe_halt(0);
     C:R ->
       io:fwrite("~p~n",[{C,R,erlang:get_stacktrace()}]),
       maybe_halt(1)
@@ -263,8 +264,7 @@ init() ->
 starting(Cnf = #cnf{print_pid=PrintPid}) ->
   receive
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}});
-    {prfTrc,{starting,P,F,T,C}}  -> Cnf#cnf.shell_pid ! {running,P,F},
-                                    running(Cnf#cnf{trc_pid=T,cons_pid=C});
+    {prfTrc,{starting,P,F,T,C}}  -> running(Cnf#cnf{trc_pid=T,cons_pid=C},P,F);
     {'EXIT',_,{prfTrc,R}}        -> throw(R);
     {prfTrc,{already_started,_}} -> ?log(already_started);
     {'EXIT',PrintPid,R}          -> ?log([printer_died,{reason,R}]);
@@ -272,8 +272,9 @@ starting(Cnf = #cnf{print_pid=PrintPid}) ->
     X                            -> ?log([{unknown_message,X}])
   end.
 
-running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
+running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid},P,F) ->
   Cnf#cnf.print_pid ! {trace_consumer,Cnf#cnf.cons_pid},
+  [Cnf#cnf.shell_pid ! {running,P,F} || is_pid(Cnf#cnf.shell_pid)],
   receive
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}}),
                    stopping(Cnf);
