@@ -135,16 +135,11 @@ start_trace(LD) ->
   Rtps = fetch(rtps,Conf),
   Flags = [{tracer,real_consumer(Consumer)}|fetch(flags,Conf)],
   unset_tps(),
-  case 0 < lists:sum([erlang:trace(P,true,Flags) || P <- Ps]) of
-    true -> ok;
-    false-> exit({prfTrc,no_matching_processes})
-  end,
+  NoProcs = lists:sum([erlang:trace(P,true,Flags) || P <- Ps]),
   untrace(family(redbug)++family(prfTrc),Flags),
-  case 0 < set_tps(Rtps) of
-    true -> ok;
-    false-> exit({prfTrc,no_matching_functions})
-  end,
-  fetch(host_pid,LD) ! {prfTrc,{starting,self(),Consumer}},
+  NoFuncs = set_tps(Rtps),
+  assert_trace_targets(NoProcs,NoFuncs),
+  fetch(host_pid,LD) ! {prfTrc,{starting,NoProcs,NoFuncs,self(),Consumer}},
   store(consumer,Consumer,LD).
 
 family(Daddy) ->
@@ -160,6 +155,16 @@ untrace(Pids,Flags) ->
           is_pid(P),
           node(P)==node(),
           {flags,[]}=/=erlang:trace_info(P,flags)].
+
+assert_trace_targets(NoProcs,NoFuncs) ->
+  case 0 < NoProcs of
+    true -> ok;
+    false-> exit({prfTrc,no_matching_processes})
+  end,
+  case 0 < NoFuncs of
+    true -> ok;
+    false-> exit({prfTrc,no_matching_functions})
+  end.
 
 unset_tps() ->
   erlang:trace_pattern({'_','_','_'},false,[local]),

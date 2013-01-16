@@ -213,7 +213,7 @@ assert_cookie(Cnf) -> erlang:set_cookie(Cnf#cnf.target,Cnf#cnf.cookie).
 block_a_little() ->
   Ref = erlang:monitor(process,redbug),
   receive
-    running            -> erlang:demonitor(Ref),ok;
+    {running,NoP,NoF}  -> erlang:demonitor(Ref), {NoP,NoF};
     {'DOWN',Ref,_,_,R} -> R
   end.
 
@@ -262,7 +262,8 @@ init() ->
 starting(Cnf = #cnf{print_pid=PrintPid}) ->
   receive
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}});
-    {prfTrc,{starting,T,C}}      -> running(Cnf#cnf{trc_pid=T,cons_pid=C});
+    {prfTrc,{starting,P,F,T,C}}  -> Cnf#cnf.shell_pid ! {running,P,F},
+                                    running(Cnf#cnf{trc_pid=T,cons_pid=C});
     {'EXIT',_,{prfTrc,R}}        -> throw(R);
     {prfTrc,{already_started,_}} -> ?log(already_started);
     {'EXIT',PrintPid,R}          -> ?log([printer_died,{reason,R}]);
@@ -272,7 +273,6 @@ starting(Cnf = #cnf{print_pid=PrintPid}) ->
 
 running(Cnf = #cnf{trc_pid=TrcPid,print_pid=PrintPid}) ->
   Cnf#cnf.print_pid ! {trace_consumer,Cnf#cnf.cons_pid},
-  Cnf#cnf.shell_pid ! running,
   receive
     {stop,Args} -> prf:config(prf_redbug,prfTrc,{stop,{self(),Args}}),
                    stopping(Cnf);
