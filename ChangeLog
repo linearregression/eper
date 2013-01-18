@@ -1,3 +1,13 @@
+commit f3a70b6ed1a8be61c7faa7a745419eecbc107f9a
+Author: mats cronqvist <masse@klarna.com>
+Date:   Wed Jan 16 19:19:10 2013 +0100
+
+    fixed the ability to run redbug from bash
+
+ChangeLog
+priv/bin/redbug
+src/redbug.erl
+
 commit 7f4dd38cf0de3598e321c708beba6f872e181b32
 Author: mats cronqvist <masse@klarna.com>
 Date:   Wed Jan 16 18:35:30 2013 +0100

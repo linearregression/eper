@@ -219,7 +219,7 @@ block_a_little() ->
     {'DOWN',Ref,_,_,R} -> R
   end.
 
-maybe_block(#cnf{blocking=true},ok) -> block();
+maybe_block(#cnf{blocking=true},{_,_}) -> block();
 maybe_block(_,R) -> R.
 
 block() ->
