@@ -22,6 +22,7 @@
     ,init/1
     ,rec_info/1]).
 
+-include_lib("kernel/include/inet.hrl").
 -include("log.hrl").
 
 -record(ld,
@@ -370,13 +371,15 @@ mk_send(udp,Name,Port,Cookie,LD) ->
 mk_send(UdpPort,Name,Port,Cookie,LD) when is_integer(UdpPort)->
   case LD#ld.cache_connections of
     true ->
-      {ok,Sck} = gen_udp:open(UdpPort,[binary]),
       try
+        {ok,Hostent} = inet:gethostbyname(Name),
+        Addr = hd(Hostent#hostent.h_addr_list),
+        {ok,Sck} = gen_udp:open(UdpPort,[binary]),
         fun(Chunk) ->
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
             PaySize = byte_size(Payload),
-            catch gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>)
+            catch gen_udp:send(Sck,Addr,Port,<<PaySize:32,Payload/binary>>)
         end
       catch _:_ -> fun(_) -> ok end
       end;
