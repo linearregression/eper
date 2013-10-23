@@ -109,11 +109,8 @@ add_proc_subscriber({Reg,Node}) when is_atom(Reg),is_atom(Node) ->
 %% E.g:  watchdog:add_send_subscriber(tcp,"localhost",56669,"I'm a Cookie").
 add_send_subscriber(Proto,Host,Port,PassPhrase) ->
   case inet:gethostbyname(Host) of
-    {ok,{hostent,Host,[],inet,4,_}} ->
-      send_to_wd({add_subscriber,{{Proto,{Host,Port}},PassPhrase}});
-    {ok,{hostent,G,[W],inet,4,_}} -> {error,{badhost,W,G}};
-    {ok,R}                        -> {error,R};
-    {error,R}                     -> {error,R}
+    {ok,_}    -> send_to_wd({add_subscriber,{{Proto,{Host,Port}},PassPhrase}});
+    {error,R} -> {error,R}
   end.
 
 add_log_subscriber({trc,FN}) ->
@@ -367,14 +364,12 @@ mk_send(Where) ->
   end.
 
 mk_send(udp,Name,Port,Cookie,LD) ->
-  mk_send(0,Name,Port,Cookie,LD);
-mk_send(UdpPort,Name,Port,Cookie,LD) when is_integer(UdpPort)->
   case LD#ld.cache_connections of
     true ->
       try
         {ok,Hostent} = inet:gethostbyname(Name),
         Addr = hd(Hostent#hostent.h_addr_list),
-        {ok,Sck} = gen_udp:open(UdpPort,[binary]),
+        {ok,Sck} = gen_udp:open(0,[binary]),
         fun(Chunk) ->
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
@@ -389,7 +384,7 @@ mk_send(UdpPort,Name,Port,Cookie,LD) when is_integer(UdpPort)->
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
             PaySize = byte_size(Payload),
-            {ok,Sck} = gen_udp:open(UdpPort,[binary]),
+            {ok,Sck} = gen_udp:open(0,[binary]),
             gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>),
             gen_udp:close(Sck)
           catch _:_ -> ok
