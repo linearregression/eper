@@ -47,14 +47,18 @@ show_these_fields() ->
   [timeout_restart,max_jailed,timeout_release,cache_connections,
    jailed,subscribers,triggers].
 
-upgrade({ld,Js,Ss,Ts,PS,UD,PD,MD}) ->
-  #ld{jailed=Js
-      ,subscribers=Ss
-      ,triggers=Ts
-      ,prfState=PS
-      ,userData=UD
-      ,prfData=PD
-      ,monData=MD
+upgrade({ld,TR,MJ,TS,Js,Ss,Ts,PS,UD,PD,MD}) ->
+  #ld{timeout_restart=TR
+     ,max_jailed=MJ
+     ,timeout_release=TS
+     ,cache_connections=false
+     ,jailed=Js
+     ,subscribers=Ss
+     ,triggers=Ts
+     ,prfState=PS
+     ,userData=UD
+     ,prfData=PD
+     ,monData=MD
      }.
 
 %% constants
