@@ -25,9 +25,10 @@
 -include("log.hrl").
 
 -record(ld,
-        {timeout_restart=5000 %turn off sys_mon this long @ max_jailed
-         ,max_jailed=20       %turn off sys_mon when jail is this full
-         ,timeout_release=100  %keep pid/msg_type in jail this long
+        {timeout_restart=5000         %turn off sys_mon this long @ max_jailed
+         ,max_jailed=20               %turn off sys_mon when jail is this full
+         ,timeout_release=100         %keep pid/msg_type in jail this long
+         ,cache_connections=true      %keep udp/tcp sockets open
 
          ,jailed=[]                      %jailed pids
          ,subscribers=[]                 %where to send our reports
@@ -42,7 +43,8 @@ rec_info(ld) -> record_info(fields,ld);
 rec_info(_)  -> [].
 
 show_these_fields() ->
-  [timeout_restart,max_jailed,timeout_release,jailed,subscribers,triggers].
+  [timeout_restart,max_jailed,timeout_release,cache_connections,
+   jailed,subscribers,triggers].
 
 upgrade({ld,Js,Ss,Ts,PS,UD,PD,MD}) ->
   #ld{jailed=Js
@@ -155,6 +157,8 @@ handle_info({cfg,max_jailed,MJ}, LD)      when is_integer(MJ) ->
   LD#ld{max_jailed=MJ};
 handle_info({cfg,timeout_release,TR}, LD) when is_integer(TR)->
   LD#ld{timeout_release=TR};
+handle_info({cfg,cache_connections,TR}, LD) when is_boolean(TR)->
+  LD#ld{cache_connections=TR};
 
 % admin triggers
 handle_info({delete_trigger,Key},LD) ->
@@ -167,8 +171,8 @@ handle_info(clear_subscribers,LD) ->
   LD#ld{subscribers=[]};
 handle_info({delete_subscriber,Key},LD = #ld{subscribers=Subs}) ->
   LD#ld{subscribers=delete_subscriber(Key,Subs)};
-handle_info({add_subscriber,{Key,Val}},LD = #ld{subscribers=Subs}) ->
-  LD#ld{subscribers=add_subscriber(Key,Val,Subs)};
+handle_info({add_subscriber,{Key,Val}},LD) ->
+  LD#ld{subscribers=add_subscriber(Key,Val,LD)};
 
 % events
 handle_info(trigger,LD) -> % fake trigger for debugging
@@ -295,8 +299,8 @@ check_trigger({ID,T},Data) when is_function(T) ->
 delete_subscriber(Key,Subs) ->
   lists:keydelete(Key,1,Subs).
 
-add_subscriber(Key,Val,Subs) ->
-  try Sub = mk_subscriber(Key,Val),
+add_subscriber(Key,Val,LD = #ld{subscribers=Subs}) ->
+  try Sub = mk_subscriber(Key,Val,LD),
       case lists:keysearch(Key,1,Subs) of
         false -> [{Key,Sub}|Subs];
         _     -> lists:keyreplace(Key,1,Subs,{Key, Sub})
@@ -347,11 +351,11 @@ lks(Tag,List) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-mk_subscriber({pid,To},_) -> mk_send(To);
-mk_subscriber({Proto,{Host,Port}},Pwd) -> mk_send(Proto,Host,Port,Pwd);
-mk_subscriber({log,trc},FN) -> mk_log(trc,open_file(FN));
-mk_subscriber({log,text},FN) -> mk_log(text,open_file(FN));
-mk_subscriber({log,screen},_) -> mk_log(text,group_leader()).
+mk_subscriber({pid,To},_,_)              -> mk_send(To);
+mk_subscriber({Proto,{Host,Port}},Pwd,LD)-> mk_send(Proto,Host,Port,Pwd,LD);
+mk_subscriber({log,trc},FN,_)            -> mk_log(trc,open_file(FN));
+mk_subscriber({log,text},FN,_)           -> mk_log(text,open_file(FN));
+mk_subscriber({log,screen},_,_)          -> mk_log(text,group_leader()).
 
 %% send subscribers
 mk_send(Where) ->
@@ -361,28 +365,54 @@ mk_send(Where) ->
       end
   end.
 
-mk_send(tcp,Name,Port,Cookie) ->
-  ConnOpts = [{send_timeout,100},{active,false},{packet,4},binary],
-  ConnTimeout =  100,
-  fun(Chunk)->
-      try {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
-          try gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
-          after gen_tcp:close(Sck)
+mk_send(udp,Name,Port,Cookie,LD) ->
+  mk_send(0,Name,Port,Cookie,LD);
+mk_send(UdpPort,Name,Port,Cookie,LD) when is_integer(UdpPort)->
+  case LD#ld.cache_connections of
+    true ->
+      {ok,Sck} = gen_udp:open(UdpPort,[binary]),
+      try
+        fun(Chunk) ->
+            BC = term_to_binary(Chunk,[{compressed,3}]),
+            Payload = prf_crypto:encrypt(Cookie,BC),
+            PaySize = byte_size(Payload),
+            catch gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>)
+        end
+      catch _:_ -> fun(_) -> ok end
+      end;
+    false->
+      fun(Chunk) ->
+          try
+            BC = term_to_binary(Chunk,[{compressed,3}]),
+            Payload = prf_crypto:encrypt(Cookie,BC),
+            PaySize = byte_size(Payload),
+            {ok,Sck} = gen_udp:open(UdpPort,[binary]),
+            gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>),
+            gen_udp:close(Sck)
+          catch _:_ -> ok
           end
-      catch _:_ -> ok
       end
   end;
-mk_send(udp,Name,Port,Cookie) ->
-  mk_send(0,Name,Port,Cookie);
-mk_send(UdpPort,Name,Port,Cookie) when is_integer(UdpPort)->
-  fun(Chunk) ->
-      try BC = term_to_binary(Chunk,[{compressed,3}]),
-          Payload = prf_crypto:encrypt(Cookie,BC),
-          PaySize = byte_size(Payload),
-          {ok,Sck} = gen_udp:open(UdpPort,[binary]),
-          gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>),
-          gen_udp:close(Sck)
-      catch _:_ -> ok
+mk_send(tcp,Name,Port,Cookie,LD) ->
+  ConnOpts = [{send_timeout,100},{active,false},{packet,4},binary],
+  ConnTimeout =  100,
+  case LD#ld.cache_connections of
+    false->
+      fun(Chunk)->
+          try {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
+               try gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
+               after gen_tcp:close(Sck)
+               end
+          catch _:_ -> ok
+          end
+      end;
+    true ->
+      try
+        {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
+        fun(Chunk)->
+            catch gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
+        end
+      catch _:_ -> fun(_) -> ok end
       end
   end.
 
