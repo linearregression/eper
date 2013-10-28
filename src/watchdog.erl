@@ -374,7 +374,9 @@ mk_send(udp,Name,Port,Cookie,LD) ->
         {ok,Hostent} = inet:gethostbyname(Name),
         Addr = hd(Hostent#hostent.h_addr_list),
         {ok,Sck} = gen_udp:open(0,[binary]),
-        fun(Chunk) ->
+        fun(close) ->
+            gen_udp:close(Sck);
+           (Chunk) ->
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
             PaySize = byte_size(Payload),
@@ -383,7 +385,9 @@ mk_send(udp,Name,Port,Cookie,LD) ->
       catch _:_ -> fun(_) -> ok end
       end;
     false->
-      fun(Chunk) ->
+      fun(close) ->
+          ok;
+         (Chunk) ->
           try
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
@@ -400,7 +404,9 @@ mk_send(tcp,Name,Port,Cookie,LD) ->
   ConnTimeout =  100,
   case LD#ld.cache_connections of
     false->
-      fun(Chunk)->
+      fun(close)->
+          ok;
+         (Chunk)->
           try {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
                try gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
                after gen_tcp:close(Sck)
@@ -411,7 +417,9 @@ mk_send(tcp,Name,Port,Cookie,LD) ->
     true ->
       try
         {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
-        fun(Chunk)->
+        fun(close) ->
+            gen_tcp:close(Sck);
+           (Chunk)->
             catch gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
         end
       catch _:_ -> fun(_) -> ok end
