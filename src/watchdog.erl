@@ -64,7 +64,7 @@ upgrade({ld,TR,MJ,TS,Js,Ss,Ts,PS,UD,PD,MD}) ->
 %% constants
 
 default_triggers() ->
-  [ {[sysMon,long_gc],500}            %gc time [ms]
+  [ {[sysMon,long_gc],500}             %gc time [ms]
    ,{[sysMon,large_heap],1024*1024}    %heap size [words]
    ,{user,true}
    ,{ticker,true}
