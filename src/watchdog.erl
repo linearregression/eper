@@ -12,7 +12,8 @@
    [config/2
     ,start/0,stop/0,state/0
     ,add_send_subscriber/4,add_log_subscriber/1,add_proc_subscriber/1
-    ,delete_subscriber/1,clear_subscribers/0
+    ,delete_subscriber/1,reset_subscriber/1
+    ,delete_subscribers/0,reset_subscribers/0
     ,add_trigger/2,delete_trigger/1
     ,message/1]).
 
@@ -124,11 +125,17 @@ add_log_subscriber({text,FN}) ->
 add_log_subscriber(screen) ->
   send_to_wd({add_subscriber,{{log,screen},''}}).
 
+delete_subscribers() ->
+  send_to_wd(delete_subscribers).
+
 delete_subscriber(Key) ->
   send_to_wd({delete_subscriber,Key}).
 
-clear_subscribers() ->
-  send_to_wd(clear_subscribers).
+reset_subscribers() ->
+  send_to_wd(reset_subscribers).
+
+reset_subscriber(Key) ->
+  send_to_wd({reset_subscriber,Key}).
 
 message(Term) ->
   send_to_wd({user,Term}).
@@ -169,10 +176,14 @@ handle_info({add_trigger,Key,Fun},LD) ->
   LD#ld{triggers=add_trigger(LD#ld.triggers,Key,Fun)};
 
 % admin subscribers
-handle_info(clear_subscribers,LD) ->
-  LD#ld{subscribers=[]};
-handle_info({delete_subscriber,Key},LD = #ld{subscribers=Subs}) ->
-  LD#ld{subscribers=delete_subscriber(Key,Subs)};
+handle_info(reset_subscribers,LD) ->
+  LD#ld{subscribers=reset_subscribers(LD)};
+handle_info({reset_subscriber,Key},LD) ->
+  LD#ld{subscribers=reset_subscriber(Key,LD)};
+handle_info(delete_subscribers,LD) ->
+  LD#ld{subscribers=delete_subscribers(LD)};
+handle_info({delete_subscriber,Key},LD) ->
+  LD#ld{subscribers=delete_subscriber(Key,LD)};
 handle_info({add_subscriber,{Key,Val}},LD) ->
   LD#ld{subscribers=add_subscriber(Key,Val,LD)};
 
@@ -298,9 +309,38 @@ check_trigger({ID,T},Data) when is_function(T) ->
     NewT when is_function(NewT)  -> {ID,NewT}
   end.
 
-delete_subscriber(Key,Subs) ->
-  lists:keydelete(Key,1,Subs).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% admin subscribers
+%%   reset
+reset_subscribers(#ld{subscribers=Subs}) ->
+  lists:foldl(fun do_reset_subscriber/2,[],Subs).
 
+reset_subscriber(Key,#ld{subscribers=Subs}) ->
+  case lists:keytake(Key,1,Subs) of
+    false          -> Subs;
+    {value,KF,Sbs} -> do_reset_subscriber(KF,Sbs)
+  end.
+
+do_reset_subscriber({Key,F},Acc) ->
+  try [{Key,F(reset)}|Acc]
+  catch _:_ -> Acc
+  end.
+
+%%   delete
+delete_subscribers(#ld{subscribers=Subs}) ->
+  lists:foreach(fun do_delete_subscriber/1,Subs),
+  [].
+
+delete_subscriber(Key,#ld{subscribers=Subs}) ->
+  case lists:keytake(Key,1,Subs) of
+    {value,KF,Sbs} -> do_delete_subscriber(KF),Sbs;
+    false          -> Subs
+  end.
+
+do_delete_subscriber({_,F}) ->
+  catch F(stop).
+
+%%   add
 add_subscriber(Key,Val,LD = #ld{subscribers=Subs}) ->
   try Sub = mk_subscriber(Key,Val,LD),
       case lists:keysearch(Key,1,Subs) of
