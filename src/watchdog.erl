@@ -24,6 +24,7 @@
     ,rec_info/1]).
 
 -include_lib("kernel/include/inet.hrl").
+-include_lib("kernel/include/file.hrl").
 -include("log.hrl").
 
 -record(ld,
@@ -66,7 +67,10 @@ upgrade({ld,TR,MJ,TS,Js,Ss,Ts,PS,UD,PD,MD}) ->
 
 default_triggers() ->
   [ {[sysMon,long_gc],500}             %gc time [ms]
+   ,{[sysMon,long_schedule],500}       %scheduled time [ms]
    ,{[sysMon,large_heap],1024*1024}    %heap size [words]
+   ,{[sysMon,busy_port],true}
+   ,{[sysMon,busy_dist_port],true}
    ,{user,true}
    ,{ticker,true}
    ,{[prfSys,user],fun(X)->true=(0.95<X) end}
@@ -98,8 +102,8 @@ config(Tag,Val) ->
 delete_trigger(Key) ->
   send_to_wd({delete_trigger,Key}).
 
-add_trigger(Key,Fun) ->
-  send_to_wd({add_trigger,Key,Fun}).
+add_trigger(Key,Val) ->
+  send_to_wd({add_trigger,Key,Val}).
 
 add_proc_subscriber(Pid) when is_pid(Pid) ->
   case is_process_alive(Pid) of
@@ -172,8 +176,8 @@ handle_info({cfg,cache_connections,TR}, LD) when is_boolean(TR)->
 % admin triggers
 handle_info({delete_trigger,Key},LD) ->
   LD#ld{triggers=delete_trigger(LD#ld.triggers,Key)};
-handle_info({add_trigger,Key,Fun},LD) ->
-  LD#ld{triggers=add_trigger(LD#ld.triggers,Key,Fun)};
+handle_info({add_trigger,Key,Val},LD) ->
+  LD#ld{triggers=add_trigger(LD#ld.triggers,Key,Val)};
 
 % admin subscribers
 handle_info(reset_subscribers,LD) ->
@@ -235,7 +239,10 @@ start_monitor(Triggers) ->
   erlang:system_monitor(self(), sysmons(Triggers)).
 
 sysmons(Triggers) ->
-  [{Tag,Val} || {[sysMon,Tag],Val} <- Triggers] ++ [busy_port,busy_dist_port].
+  SysMons = fun({[sysMon,Tag],true},Acc)-> [Tag|Acc];
+               ({[sysMon,Tag],Val},Acc) -> [{Tag,Val}|Acc]
+            end,
+  lists:foldl(SysMons,[],Triggers).
 
 stop_monitor() ->
   erlang:system_monitor(undefined).
@@ -244,8 +251,8 @@ stop_monitor() ->
 %% Val :: number() | function()
 %% ID :: list(Tag)
 %% Tag :: atom() - tags into the data structure. i.e. [prfSys,iowait]
-add_trigger(Triggers,ID,Fun) ->
-  maybe_restart(ID,[{ID,Fun}|clean_triggers(Triggers,[ID])]).
+add_trigger(Triggers,ID,Val) ->
+  maybe_restart(ID,[{ID,Val}|clean_triggers(Triggers,[ID])]).
 
 delete_trigger(Triggers,ID) ->
   maybe_restart(ID,clean_triggers(Triggers,[ID])).
@@ -258,7 +265,7 @@ maybe_restart(Trig,Triggers) ->
   Triggers.
 
 clean_triggers(Triggers,IDs) ->
-  lists:filter(fun({ID,_})->not lists:member(ID,IDs) end, Triggers).
+  lists:filter(fun({ID,_})-> not lists:member(ID,IDs) end, Triggers).
 
 check_jailed(LD,_) when LD#ld.max_jailed < length(LD#ld.jailed) ->
   % we take a timeout when enough pids are jailed. conservative is good.
@@ -312,17 +319,18 @@ check_trigger({ID,T},Data) when is_function(T) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% admin subscribers
 %%   reset
-reset_subscribers(#ld{subscribers=Subs}) ->
-  lists:foldl(fun do_reset_subscriber/2,[],Subs).
+reset_subscribers(LD) ->
+  DoResetSubscriber2 = fun(KF,Acc) -> do_reset_subscriber(KF,Acc,LD) end,
+  lists:foldl(DoResetSubscriber2,[],LD#ld.subscribers).
 
-reset_subscriber(Key,#ld{subscribers=Subs}) ->
-  case lists:keytake(Key,1,Subs) of
-    false          -> Subs;
-    {value,KF,Sbs} -> do_reset_subscriber(KF,Sbs)
+reset_subscriber(Key,LD) ->
+  case lists:keytake(Key,1,LD#ld.subscribers) of
+    false          -> LD#ld.subscribers;
+    {value,KF,Sbs} -> do_reset_subscriber(KF,Sbs,LD)
   end.
 
-do_reset_subscriber({Key,F},Acc) ->
-  try [{Key,F(reset)}|Acc]
+do_reset_subscriber({Key,F},Acc,LD) ->
+  try [{Key,F(reset,LD)}|Acc]
   catch _:_ -> Acc
   end.
 
@@ -338,23 +346,24 @@ delete_subscriber(Key,#ld{subscribers=Subs}) ->
   end.
 
 do_delete_subscriber({_,F}) ->
-  catch F(stop).
+  catch F(stop,'').
 
 %%   add
 add_subscriber(Key,Val,LD = #ld{subscribers=Subs}) ->
   try Sub = mk_subscriber(Key,Val,LD),
       case lists:keysearch(Key,1,Subs) of
         false -> [{Key,Sub}|Subs];
-        _     -> lists:keyreplace(Key,1,Subs,{Key, Sub})
+        _     -> lists:keyreplace(Key,1,Subs,{Key,Sub})
       end
   catch _:R ->
       ?log([{subscriber_not_added,R},{Key,Val}]),
       Subs
     end.
 
+%% make report and send to all subscribers
 send_report(LD,Trigger) ->
   Report = make_report(Trigger,LD),
-  [Sub(Report) || {_,Sub} <- LD#ld.subscribers].
+  [Sub(send,Report) || {_,Sub} <- LD#ld.subscribers].
 
 make_report(user,LD) ->
   reporter(user,LD#ld.userData);
@@ -392,19 +401,22 @@ lks(Tag,List) ->
   end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% subscribers.
+%% a subscriber is a fun/2.
+%% Subscriber(send,Term) -> void(): sends term somewhere.
+%% Subscriber(reset,LD)  -> Subscriber/2: makes new Subscriber
+%% Subscriber(close,_)   -> void(): closes Subscriber, e.g. by doing file:close/1
+
 mk_subscriber({pid,To},_,_)              -> mk_send(To);
 mk_subscriber({Proto,{Host,Port}},Pwd,LD)-> mk_send(Proto,Host,Port,Pwd,LD);
-mk_subscriber({log,trc},FN,_)            -> mk_log(trc,open_file(FN));
-mk_subscriber({log,text},FN,_)           -> mk_log(text,open_file(FN));
-mk_subscriber({log,screen},_,_)          -> mk_log(text,group_leader()).
+mk_subscriber({log,trc},FN,_)            -> mk_log(trc,FN);
+mk_subscriber({log,text},FN,_)           -> mk_log(text,FN);
+mk_subscriber({log,screen},_,_)          -> mk_log(text,screen).
 
 %% send subscribers
 mk_send(Where) ->
-  fun(Chunk) ->
-      try Where ! Chunk
-      catch _:_ -> ok
-      end
+  fun(send,Chunk) -> try Where ! Chunk catch _:_ -> ok end;
+     (_,_)        -> ok
   end.
 
 mk_send(udp,Name,Port,Cookie,LD) ->
@@ -414,20 +426,24 @@ mk_send(udp,Name,Port,Cookie,LD) ->
         {ok,Hostent} = inet:gethostbyname(Name),
         Addr = hd(Hostent#hostent.h_addr_list),
         {ok,Sck} = gen_udp:open(0,[binary]),
-        fun(close) ->
+        fun(close,_) ->
             gen_udp:close(Sck);
-           (Chunk) ->
+           (reset,NLD) ->
+            mk_send(udp,Name,Port,Cookie,NLD);
+           (send,Chunk) ->
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
             PaySize = byte_size(Payload),
             catch gen_udp:send(Sck,Addr,Port,<<PaySize:32,Payload/binary>>)
         end
-      catch _:_ -> fun(_) -> ok end
+      catch _:_ -> fun(_,_) -> ok end
       end;
     false->
-      fun(close) ->
+      fun(close,_) ->
           ok;
-         (Chunk) ->
+         (reset,NLD) ->
+          mk_send(udp,Name,Port,Cookie,NLD);
+         (send,Chunk) ->
           try
             BC = term_to_binary(Chunk,[{compressed,3}]),
             Payload = prf_crypto:encrypt(Cookie,BC),
@@ -444,9 +460,11 @@ mk_send(tcp,Name,Port,Cookie,LD) ->
   ConnTimeout =  100,
   case LD#ld.cache_connections of
     false->
-      fun(close)->
+      fun(close,_) ->
           ok;
-         (Chunk)->
+         (reset,NLD) ->
+          mk_send(tcp,Name,Port,Cookie,NLD);
+         (send,Chunk) ->
           try {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
                try gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
                after gen_tcp:close(Sck)
@@ -457,22 +475,43 @@ mk_send(tcp,Name,Port,Cookie,LD) ->
     true ->
       try
         {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
-        fun(close) ->
+        fun(close,_) ->
             gen_tcp:close(Sck);
-           (Chunk)->
+           (reset,NLD) ->
+            mk_send(tcp,Name,Port,Cookie,NLD);
+           (send,Chunk)->
             catch gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
         end
-      catch _:_ -> fun(_) -> ok end
+      catch _:_ -> fun(_,_) -> ok end
       end
   end.
 
 %% log subscribers
-mk_log(text,FD) -> fun(E)-> print_term(FD,expand_recs(E)) end;
-mk_log(trc,FD) ->
-  fun(P)->
-      S = byte_size(P),
-      file:write(FD,<<0,S:32/integer,P/binary>>)
+mk_log(Type,FN) ->
+  FD = open_log_file(FN),
+  fun(close,_) ->
+      close_log_file(FD);
+     (reset,_) ->
+      close_log_file(FD),
+      mk_log(text,FN);
+     (send,Term)->
+      send_log_term(Type,FD,Term)
   end.
+
+send_log_term(text,FD,Term) ->
+  print_term(FD,expand_recs(Term));
+send_log_term(trc,FD,Term) ->
+  S = byte_size(Term),
+  file:write(FD,<<0,S:32/integer,Term/binary>>).
+
+open_log_file(FN) ->
+  case FN of
+    screen -> group_leader();
+    _      -> open_file(FN)
+  end.
+
+close_log_file(FD) when is_record(FD,file_descriptor) -> file:close(FD);
+close_log_file(_) -> ok.
 
 open_file(FN) ->
   ok = filelib:ensure_dir(FN),
