@@ -23,6 +23,7 @@
     ,init/1
     ,rec_info/1]).
 
+-include_lib("eunit/include/eunit.hrl").
 -include_lib("kernel/include/inet.hrl").
 -include_lib("kernel/include/file.hrl").
 -include("log.hrl").
@@ -537,3 +538,13 @@ expand_recs(Tup) when is_tuple(Tup) ->
       end
   end;
 expand_recs(Term) -> Term.
+
+
+subscriber_send_test() ->
+  SF = mk_subscriber({pid,self()},'',''),
+  SF(send,woohoo),
+  ?assert(receive woohoo -> true after 0 -> false end),
+  NSF = SF(reset,''),
+  NSF(close,'').
+
+%%lists:member(shell,[element(1,T)||T<-erlang:get_stacktrace()]).
