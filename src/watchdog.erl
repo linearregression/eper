@@ -405,8 +405,8 @@ lks(Tag,List) ->
 %% subscribers.
 %% a subscriber is a fun/2.
 %% Subscriber(send,Term) -> void(): sends term somewhere.
-%% Subscriber(reset,LD)  -> Subscriber/2: makes new Subscriber
-%% Subscriber(close,_)   -> void(): closes Subscriber, e.g. by doing file:close/1
+%% Subscriber(reset,LD) -> Subscriber/2: makes new Subscriber
+%% Subscriber(close,_) -> void(): closes Subscriber, e.g. by doing file:close/1
 
 mk_subscriber({pid,To},_,_)              -> mk_send(To);
 mk_subscriber({Proto,{Host,Port}},Pwd,LD)-> mk_send(Proto,Host,Port,Pwd,LD);
@@ -417,7 +417,8 @@ mk_subscriber({log,screen},_,_)          -> mk_log(text,screen).
 %% send subscribers
 mk_send(Where) ->
   fun(send,Chunk) -> try Where ! Chunk catch _:_ -> ok end;
-     (_,_)        -> ok
+     (reset,_)    -> mk_send(Where);
+     (close,_)    -> ok
   end.
 
 mk_send(udp,Name,Port,Cookie,LD) ->
@@ -437,7 +438,11 @@ mk_send(udp,Name,Port,Cookie,LD) ->
             PaySize = byte_size(Payload),
             catch gen_udp:send(Sck,Addr,Port,<<PaySize:32,Payload/binary>>)
         end
-      catch _:_ -> fun(_,_) -> ok end
+      catch _:_ ->
+        fun(close,_)   -> ok;
+           (reset,NLD) -> mk_send(udp,Name,Port,Cookie,NLD);
+           (send,_)    -> ok
+        end
       end;
     false->
       fun(close,_) ->
@@ -483,7 +488,11 @@ mk_send(tcp,Name,Port,Cookie,LD) ->
            (send,Chunk)->
             catch gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
         end
-      catch _:_ -> fun(_,_) -> ok end
+      catch _:_ ->
+        fun(close,_)   -> ok;
+           (reset,NLD) -> mk_send(tcp,Name,Port,Cookie,NLD);
+           (send,_)    -> ok
+        end
       end
   end.
 
