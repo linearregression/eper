@@ -137,7 +137,7 @@ de_colls(Colls,DogData) ->
   orddict:filter(F1,CD).
 
 dog_data([{prfDog,DogData}|_],Node) ->
-  F = fun({N,_},_) -> N=:=Node end,
+  F = fun({N,_,_},_) -> N=:=Node end,
   orddict:filter(F, DogData).
 
 maybe_conf(CollData, LD) ->
