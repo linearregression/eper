@@ -240,10 +240,18 @@ start_monitor(Triggers) ->
   erlang:system_monitor(self(), sysmons(Triggers)).
 
 sysmons(Triggers) ->
+  IsImplemented =
+    fun(C) ->
+        try erlang:system_monitor(self(),[C]),true
+        catch _:_ -> false
+        after erlang:system_monitor(undefined)
+        end
+    end,
   SysMons = fun({[sysMon,Tag],true},Acc)-> [Tag|Acc];
-               ({[sysMon,Tag],Val},Acc) -> [{Tag,Val}|Acc]
+               ({[sysMon,Tag],Val},Acc) -> [{Tag,Val}|Acc];
+               (_,Acc)                  -> Acc
             end,
-  lists:foldl(SysMons,[],Triggers).
+  [SM || SM <- lists:foldl(SysMons,[],Triggers),IsImplemented(SM)].
 
 stop_monitor() ->
   erlang:system_monitor(undefined).
@@ -488,7 +496,8 @@ mk_send(tcp,Name,Port,Cookie,LD) ->
            (send,Chunk)->
             catch gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
         end
-      catch _:_ ->
+      catch _:R ->
+        ?log({didnt_make_subscriber,tcp,R}),
         fun(close,_)   -> ok;
            (reset,NLD) -> mk_send(tcp,Name,Port,Cookie,NLD);
            (send,_)    -> ok
@@ -548,7 +557,8 @@ expand_recs(Tup) when is_tuple(Tup) ->
   end;
 expand_recs(Term) -> Term.
 
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% eunit
 subscriber_send_test() ->
   SF = mk_subscriber({pid,self()},'',''),
   SF(send,woohoo),

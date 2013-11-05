@@ -87,7 +87,6 @@ init(Consumer, Node, Proxy) ->
 loop(LD) ->
   receive
     {Stopper,stop} ->
-      ?log(stopping),
       do_stop(LD),
       Stopper ! stopped;
     {timeout, _, {tick}} when LD#ld.server == [] ->
