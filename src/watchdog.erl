@@ -446,6 +446,7 @@ mk_send(udp,Name,Port,Cookie,LD) ->
             PaySize = byte_size(Payload),
             catch gen_udp:send(Sck,Addr,Port,<<PaySize:32,Payload/binary>>)
         end
+
       catch _:_ ->
         fun(close,_)   -> ok;
            (reset,NLD) -> mk_send(udp,Name,Port,Cookie,NLD);
@@ -465,7 +466,7 @@ mk_send(udp,Name,Port,Cookie,LD) ->
             {ok,Sck} = gen_udp:open(0,[binary]),
             gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>),
             gen_udp:close(Sck)
-          catch _:_ -> ok
+          catch _:R -> ?log({send_failed,R})
           end
       end
   end;
@@ -559,11 +560,33 @@ expand_recs(Term) -> Term.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% eunit
-subscriber_send_test() ->
+%%lists:member(shell,[element(1,T)||T<-erlang:get_stacktrace()]).
+
+subscriber_send_proc_test() ->
   SF = mk_subscriber({pid,self()},'',''),
   SF(send,woohoo),
   ?assert(receive woohoo -> true after 0 -> false end),
   NSF = SF(reset,''),
   NSF(close,'').
 
-%%lists:member(shell,[element(1,T)||T<-erlang:get_stacktrace()]).
+subscriber_send_udp_test() ->
+  L = fun() -> {ok,_} = gen_udp:open(16#dada,[binary,{active,true}]),
+                        receive {udp,_,{127,0,0,1},_,B}->exit(B)end end,
+  {Pid,Ref} = spawn_monitor(L),
+  TO = {"localhost",16#dada},
+  SF = mk_subscriber({udp,TO},"PWD",#ld{cache_connections=false}),
+  SF(send,true),
+  ?assert(receive
+            {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
+              binary_to_term(prf_crypto:decrypt("PWD",X))
+          after
+            100 ->
+              false
+          end),
+  NSF = SF(reset,#ld{}),
+  NSF(close,'').
+
+subscriber_send_tcp_test() ->
+  TO = {tcp,{"localhost",16#dada}},
+  SF = mk_subscriber(TO,"PWD",#ld{cache_connections=false}),
+  SF.
