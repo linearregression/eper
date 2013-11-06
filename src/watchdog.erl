@@ -165,13 +165,13 @@ handle_info(Msg,OLD) when not is_record(OLD,ld) ->
   handle_info(Msg,upgrade(OLD));
 
 % admin configs
-handle_info({cfg,timeout_restart,TR}, LD) when is_integer(TR) ->
+handle_info({cfg,timeout_restart,TR},LD) when is_integer(TR) ->
   LD#ld{timeout_restart=TR};
-handle_info({cfg,max_jailed,MJ}, LD)      when is_integer(MJ) ->
+handle_info({cfg,max_jailed,MJ},LD)      when is_integer(MJ) ->
   LD#ld{max_jailed=MJ};
-handle_info({cfg,timeout_release,TR}, LD) when is_integer(TR)->
+handle_info({cfg,timeout_release,TR},LD) when is_integer(TR)->
   LD#ld{timeout_release=TR};
-handle_info({cfg,cache_connections,TR}, LD) when is_boolean(TR)->
+handle_info({cfg,cache_connections,TR},LD) when is_boolean(TR)->
   LD#ld{cache_connections=TR};
 
 % admin triggers
@@ -214,10 +214,10 @@ handle_info({monitor,Pid,Tag,Data},LD) -> % data from system_monitor
   end;
 
 % timeouts
-handle_info({timeout, _, restart},LD) -> % restarting after timeout
+handle_info({timeout,_,restart},LD) -> % restarting after timeout
   start_monitor(LD#ld.triggers),
   LD#ld{jailed=[]};
-handle_info({timeout, _, {release, Pid}},LD) -> % release a pid from jail
+handle_info({timeout,_,{release,Pid}},LD) -> % release a pid from jail
   LD#ld{jailed = LD#ld.jailed--[Pid]};
 
 % "this shouldn't happen"(TM)
@@ -231,13 +231,13 @@ handle_state() ->
 handle_state(Ks) ->
   try
     State = gen_serv:get_state(?MODULE),
-    [I || {Key,_} = I <- State, lists:member(Key,Ks)]
+    [I || {Key,_} = I <- State,lists:member(Key,Ks)]
   catch
     _:R -> R
   end.
 
 start_monitor(Triggers) ->
-  erlang:system_monitor(self(), sysmons(Triggers)).
+  erlang:system_monitor(self(),sysmons(Triggers)).
 
 sysmons(Triggers) ->
   IsImplemented =
@@ -268,28 +268,28 @@ delete_trigger(Triggers,ID) ->
 
 maybe_restart(Trig,Triggers) ->
   case Trig of
-    [sysMon|_] -> stop_monitor(), start_monitor(Triggers);
+    [sysMon|_] -> stop_monitor(),start_monitor(Triggers);
     _ -> ok
   end,
   Triggers.
 
 clean_triggers(Triggers,IDs) ->
-  lists:filter(fun({ID,_})-> not lists:member(ID,IDs) end, Triggers).
+  lists:filter(fun({ID,_})-> not lists:member(ID,IDs) end,Triggers).
 
 check_jailed(LD,_) when LD#ld.max_jailed < length(LD#ld.jailed) ->
   % we take a timeout when enough pids are jailed. conservative is good.
-  erlang:start_timer(LD#ld.timeout_restart, self(), restart),
+  erlang:start_timer(LD#ld.timeout_restart,self(),restart),
   stop_monitor(),
   flush(),
   throw(taking_timeout);
 check_jailed(LD = #ld{timeout_release=0},_) ->
   LD;
 check_jailed(LD,What) ->
-  case lists:member(What, LD#ld.jailed) of
+  case lists:member(What,LD#ld.jailed) of
     true ->
       throw(is_jailed);
     false->
-      erlang:start_timer(LD#ld.timeout_release, self(), {release, What}),
+      erlang:start_timer(LD#ld.timeout_release,self(),{release,What}),
       LD#ld{jailed=[What|LD#ld.jailed]}
   end.
 
@@ -302,7 +302,7 @@ do_user(LD) ->
   LD.
 
 do_triggers(LD) ->
-  {Triggered, NewTriggers} = check_triggers(LD#ld.triggers,LD#ld.prfData),
+  {Triggered,NewTriggers} = check_triggers(LD#ld.triggers,LD#ld.prfData),
   [send_report(LD,Trig) || Trig <- Triggered],
   LD#ld{triggers=NewTriggers}.
 
@@ -405,7 +405,7 @@ get_measurement([T|Tags],Data) -> get_measurement(Tags,lks(T,Data));
 get_measurement([],Data) -> Data.
 
 lks(Tag,List) ->
-  try {value,{Tag,Val}} = lists:keysearch(Tag,1,List), Val
+  try {value,{Tag,Val}} = lists:keysearch(Tag,1,List),Val
   catch _:_ -> throw({no_such_key,Tag})
   end.
 
@@ -429,82 +429,86 @@ mk_send(Where) ->
      (close,_)    -> ok
   end.
 
-mk_send(udp,Name,Port,Cookie,LD) ->
-  case LD#ld.cache_connections of
-    true ->
-      try
-        {ok,Hostent} = inet:gethostbyname(Name),
-        Addr = hd(Hostent#hostent.h_addr_list),
-        {ok,Sck} = gen_udp:open(0,[binary]),
-        fun(close,_) ->
-            gen_udp:close(Sck);
-           (reset,NLD) ->
-            mk_send(udp,Name,Port,Cookie,NLD);
-           (send,Chunk) ->
-            BC = term_to_binary(Chunk,[{compressed,3}]),
-            Payload = prf_crypto:encrypt(Cookie,BC),
-            PaySize = byte_size(Payload),
-            catch gen_udp:send(Sck,Addr,Port,<<PaySize:32,Payload/binary>>)
-        end
+mk_send(Proto,Host,Port,Cookie,LD) ->
+  mk_send({Proto,LD#ld.cache_connections},Host,Port,Cookie).
 
-      catch _:_ ->
-        fun(close,_)   -> ok;
-           (reset,NLD) -> mk_send(udp,Name,Port,Cookie,NLD);
-           (send,_)    -> ok
+mk_send({udp,true},Host,Port,Cookie) ->
+  try
+    {ok,Hostent} = inet:gethostbyname(Host),
+    Addr = hd(Hostent#hostent.h_addr_list),
+    {ok,Sck} = gen_udp:open(0,[binary]),
+    fun(close,_) ->
+        gen_udp:close(Sck);
+       (reset,NLD) ->
+        mk_send(udp,Host,Port,Cookie,NLD);
+       (send,Chunk) ->
+        try gen_udp:send(Sck,Addr,Port,mk_payload(Chunk,Cookie))
+        catch _:_ -> ok
         end
-      end;
-    false->
-      fun(close,_) ->
-          ok;
-         (reset,NLD) ->
-          mk_send(udp,Name,Port,Cookie,NLD);
-         (send,Chunk) ->
-          try
-            BC = term_to_binary(Chunk,[{compressed,3}]),
-            Payload = prf_crypto:encrypt(Cookie,BC),
-            PaySize = byte_size(Payload),
-            {ok,Sck} = gen_udp:open(0,[binary]),
-            gen_udp:send(Sck,Name,Port,<<PaySize:32,Payload/binary>>),
-            gen_udp:close(Sck)
-          catch _:R -> ?log({send_failed,R})
-          end
+    end
+  catch _:R ->
+    ?log({didnt_make_subscriber,udp,R}),
+    fun(close,_)   -> ok;
+       (reset,NLD) -> mk_send(udp,Host,Port,Cookie,NLD);
+       (send,_)    -> ok
+    end
+  end;
+mk_send({udp,false},Host,Port,Cookie) ->
+  fun(close,_) ->
+      ok;
+     (reset,NLD) ->
+      mk_send(udp,Host,Port,Cookie,NLD);
+     (send,Chunk) ->
+      try
+        {ok,Sck} = gen_udp:open(0,[binary]),
+        gen_udp:send(Sck,Host,Port,mk_payload(Chunk,Cookie)),
+        gen_udp:close(Sck)
+      catch _:_ -> ok
       end
   end;
-mk_send(tcp,Name,Port,Cookie,LD) ->
-  ConnOpts = [{send_timeout,100},{active,false},{packet,4},binary],
-  ConnTimeout =  100,
-  case LD#ld.cache_connections of
-    false->
-      fun(close,_) ->
-          ok;
-         (reset,NLD) ->
-          mk_send(tcp,Name,Port,Cookie,NLD);
-         (send,Chunk) ->
-          try {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
-               try gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
-               after gen_tcp:close(Sck)
-               end
-          catch _:_ -> ok
-          end
-      end;
-    true ->
+mk_send({tcp,false},Host,Port,Cookie) ->
+  fun(close,_) ->
+      ok;
+     (reset,NLD) ->
+      mk_send(tcp,Host,Port,Cookie,NLD);
+     (send,Chunk) ->
       try
-        {ok,Sck} = gen_tcp:connect(Name,Port,ConnOpts,ConnTimeout),
-        fun(close,_) ->
-            gen_tcp:close(Sck);
-           (reset,NLD) ->
-            mk_send(tcp,Name,Port,Cookie,NLD);
-           (send,Chunk)->
-            catch gen_tcp:send(Sck,prf_crypto:encrypt(Cookie,Chunk))
+        ConnOpts = [{send_timeout,100},{active,false},binary],
+        ConnTimeout = 100,
+        {ok,Sck} = gen_tcp:connect(Host,Port,ConnOpts,ConnTimeout),
+        try gen_tcp:send(Sck,mk_payload(Chunk,Cookie))
+        after gen_tcp:close(Sck)
         end
-      catch _:R ->
-        ?log({didnt_make_subscriber,tcp,R}),
-        fun(close,_)   -> ok;
-           (reset,NLD) -> mk_send(tcp,Name,Port,Cookie,NLD);
-           (send,_)    -> ok
-        end
+      catch _:_ -> ok
       end
+  end;
+mk_send({tcp,true},Host,Port,Cookie) ->
+  try
+    ConnOpts = [{send_timeout,100},{active,false},binary],
+    ConnTimeout = 100,
+    {ok,Sck} = gen_tcp:connect(Host,Port,ConnOpts,ConnTimeout),
+    fun(close,_) ->
+        gen_tcp:close(Sck);
+       (reset,NLD) ->
+        mk_send(tcp,Host,Port,Cookie,NLD);
+       (send,Chunk)->
+        try gen_tcp:send(Sck,mk_payload(Chunk,Cookie))
+        catch _:_ -> ok
+        end
+    end
+  catch _:R ->
+    ?log({didnt_make_subscriber,tcp,R}),
+    fun(close,_)   -> ok;
+       (reset,NLD) -> mk_send(tcp,Host,Port,Cookie,NLD);
+       (send,_)    -> ok
+    end
   end.
+
+mk_payload(Chunk,Cookie) ->
+  BC = term_to_binary(Chunk,[{compressed,3}]),
+  Payload = prf_crypto:encrypt(Cookie,BC),
+  PaySize = byte_size(Payload),
+  <<PaySize:32,Payload/binary>>.
 
 %% log subscribers
 mk_log(Type,FN) ->
@@ -570,23 +574,45 @@ subscriber_send_proc_test() ->
   NSF(close,'').
 
 subscriber_send_udp_test() ->
-  L = fun() -> {ok,_} = gen_udp:open(16#dada,[binary,{active,true}]),
-                        receive {udp,_,{127,0,0,1},_,B}->exit(B)end end,
-  {Pid,Ref} = spawn_monitor(L),
-  TO = {"localhost",16#dada},
-  SF = mk_subscriber({udp,TO},"PWD",#ld{cache_connections=false}),
-  SF(send,true),
-  ?assert(receive
-            {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
-              binary_to_term(prf_crypto:decrypt("PWD",X))
-          after
-            100 ->
-              false
-          end),
+  SF = sender(udp,#ld{cache_connections=false}),
+  ?assert(receiver(udp,SF)),
   NSF = SF(reset,#ld{}),
   NSF(close,'').
 
 subscriber_send_tcp_test() ->
-  TO = {tcp,{"localhost",16#dada}},
-  SF = mk_subscriber(TO,"PWD",#ld{cache_connections=false}),
-  SF.
+  SF = sender(tcp,#ld{cache_connections=false}),
+  ?assert(receiver(tcp,SF)),
+  SF(close,''),
+  SF(reset,#ld{cache_connections=false}).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% test helpers
+
+sender(Prot,LD) ->
+  mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD).
+
+receiver(Prot,SF) ->
+  L =
+    case Prot of
+      udp ->
+        fun() ->
+            Opts = [binary,{reuseaddr,true},{active,true}],
+            {ok,_} = gen_udp:open(16#dada,Opts),
+            receive {udp,_,{127,0,0,1},_,B}->exit(B)end
+        end;
+      tcp ->
+        fun() ->
+            Opts = [binary,{reuseaddr,true},{active,true}],
+            {ok,ListenSock} = gen_tcp:listen(16#dada,Opts),
+            {ok,Socket} = gen_tcp:accept(ListenSock),
+            receive {tcp,Socket,B}->exit(B)end
+        end
+    end,
+  {Pid,Ref} = spawn_monitor(L),
+  receive after 200 -> ok end,
+  SF(send,true),
+  receive {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
+      binary_to_term(prf_crypto:decrypt("PWD",X))
+  after 1000 -> false
+  end.

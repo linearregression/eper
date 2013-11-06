@@ -34,18 +34,13 @@ config(LD,Data) ->
   LD.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% implementation details
-
-sock_opts() -> [binary, {reuseaddr,true}, {active,true}, {packet,4}].
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% gen_serv callbacks
 
 rec_info(ld) -> record_info(fields,ld);
 rec_info(_)  -> [].
 
 init(Args) ->
-  LD = #ld{args=Args,acceptor=accept(56669,sock_opts())},
+  LD = #ld{args=Args,acceptor=accept(56669)},
   watchdog:add_send_subscriber(tcp,"localhost",56669,LD#ld.cookie),
   LD.
 
@@ -78,10 +73,11 @@ handle_info(Msg,LD) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% accept is blocking, so it runs in its own process
-accept(Port,Opts) ->
-  erlang:spawn_link(fun() -> acceptor(Port,Opts) end).
+accept(Port) ->
+  erlang:spawn_link(fun() -> acceptor(Port) end).
 
-acceptor(Port,Opts) ->
+acceptor(Port) ->
+  Opts = [binary,{reuseaddr,true},{active,true},{packet,4}],
   {ok,ListenSock} = gen_tcp:listen(Port,Opts),
   acceptor_loop(ListenSock).
 
