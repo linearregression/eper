@@ -490,6 +490,7 @@ mk_send({tcp,true},Host,Port,Cookie) ->
     fun(close,_) ->
         gen_tcp:close(Sck);
        (reset,NLD) ->
+        gen_tcp:close(Sck),
         mk_send(tcp,Host,Port,Cookie,NLD);
        (send,Chunk)->
         try gen_tcp:send(Sck,mk_payload(Chunk,Cookie))
@@ -573,26 +574,38 @@ subscriber_send_proc_test() ->
   NSF = SF(reset,''),
   NSF(close,'').
 
-subscriber_send_udp_test() ->
-  SF = sender(udp,#ld{cache_connections=false}),
-  ?assert(receiver(udp,SF)),
-  NSF = SF(reset,#ld{}),
+subscriber_send_udp_nocache_test() ->
+  {PR,SF} = mk_sender_receiver(udp,#ld{cache_connections=false}),
+  ?assert(send_receive(PR,SF)),
+  NSF = SF(reset,#ld{cache_connections=false}),
   NSF(close,'').
 
-subscriber_send_tcp_test() ->
-  SF = sender(tcp,#ld{cache_connections=false}),
-  ?assert(receiver(tcp,SF)),
+subscriber_send_udp_cache_test() ->
+  {PR,SF} = mk_sender_receiver(udp,#ld{cache_connections=true}),
+  ?assert(send_receive(PR,SF)),
+  NSF = SF(reset,#ld{cache_connections=true}),
+  NSF(close,'').
+
+subscriber_send_tcp_nocache_test() ->
+  {PR,SF} = mk_sender_receiver(tcp,#ld{cache_connections=false}),
+  ?assert(send_receive(PR,SF)),
   SF(close,''),
   SF(reset,#ld{cache_connections=false}).
 
+subscriber_send_tcp_cache_test() ->
+  {PR0,SF0} = mk_sender_receiver(tcp,#ld{cache_connections=true}),
+  ?assert(send_receive(PR0,SF0)),
+  SF0(close,''),
+  {PR1,_SF1} = mk_sender_receiver(tcp,#ld{cache_connections=false}),
+  SF2 = SF0(reset,#ld{cache_connections=true}),
+  ?assert(send_receive(PR1,SF2)),
+  %% SF1(close,''),
+  SF2(close,'').
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test helpers
 
-sender(Prot,LD) ->
-  mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD).
-
-receiver(Prot,SF) ->
+mk_sender_receiver(Prot,LD) ->
   L =
     case Prot of
       udp ->
@@ -609,8 +622,11 @@ receiver(Prot,SF) ->
             receive {tcp,Socket,B}->exit(B)end
         end
     end,
-  {Pid,Ref} = spawn_monitor(L),
+  PR = spawn_monitor(L),
   receive after 200 -> ok end,
+  {PR,mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD)}.
+
+send_receive({Pid,Ref},SF) ->
   SF(send,true),
   receive {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
       binary_to_term(prf_crypto:decrypt("PWD",X))
