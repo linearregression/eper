@@ -526,7 +526,7 @@ mk_log(Type,FN) ->
   end.
 
 send_log_term(text,FD,Term) ->
-  io:fwrite(FD," ~p.~n",[expand_recs(Term)]);
+  file:write(FD,io_lib:fwrite("~p.~n",[expand_recs(Term)]));
 send_log_term(trc,FD,Term) ->
   S = byte_size(Term),
   file:write(FD,<<0,S:32/integer,Term/binary>>).
@@ -565,7 +565,7 @@ expand_recs(Term) -> Term.
 
 start_stop_test() ->
   watchdog:start(),
-  receive after 1000 -> ok end,
+  receive after 100 -> ok end,
   PR = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
   watchdog:state(),
@@ -575,6 +575,17 @@ start_stop_test() ->
               _ -> false
           end),
   watchdog:stop().
+
+subscriber_log_text_test() ->
+  watchdog:start(),
+  FN = mk_tmpfile(),
+  watchdog:add_log_subscriber({text,FN}),
+  watchdog:message(trivial),
+  watchdog:stop(),
+  receive after 100 -> ok end,
+  {ok,B} = file:read_file(FN),
+  file:delete(FN),
+  {match,[{_,7}]} = re:run(B,"trivial").
 
 subscriber_send_proc_test() ->
   SF = mk_subscriber({pid,self()},'',''),
@@ -644,3 +655,8 @@ do_receive({Pid,Ref}) ->
       binary_to_term(prf_crypto:decrypt("PWD",X))
   after 1000 -> false
   end.
+
+mk_tmpfile() ->
+  {ok,Dir} = file:get_cwd(),
+  [file:delete(F) || F <- filelib:wildcard(filename:join(Dir,"#R*"))],
+  filename:join(Dir,io_lib:fwrite("~p",[erlang:make_ref()])).
