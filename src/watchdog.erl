@@ -567,6 +567,19 @@ expand_recs(Term) -> Term.
 %% eunit
 %%lists:member(shell,[element(1,T)||T<-erlang:get_stacktrace()]).
 
+start_stop_test() ->
+  watchdog:start(),
+  receive after 1000 -> ok end,
+  PR = mk_receiver(udp),
+  watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
+  watchdog:state(),
+  watchdog:message(truism),
+  ?assert(case do_receive(PR) of
+              {watchdog,'nonode@nohost',_,user,truism} -> true;
+              _ -> false
+          end),
+  watchdog:stop().
+
 subscriber_send_proc_test() ->
   SF = mk_subscriber({pid,self()},'',''),
   SF(send,woohoo),
@@ -575,38 +588,41 @@ subscriber_send_proc_test() ->
   NSF(close,'').
 
 subscriber_send_udp_nocache_test() ->
-  {PR,SF} = mk_sender_receiver(udp,#ld{cache_connections=false}),
+  PR = mk_receiver(udp),
+  SF = mk_sender(udp,#ld{cache_connections=false}),
   ?assert(send_receive(PR,SF)),
   NSF = SF(reset,#ld{cache_connections=false}),
   NSF(close,'').
 
 subscriber_send_udp_cache_test() ->
-  {PR,SF} = mk_sender_receiver(udp,#ld{cache_connections=true}),
+  PR = mk_receiver(udp),
+  SF = mk_sender(udp,#ld{cache_connections=true}),
   ?assert(send_receive(PR,SF)),
   NSF = SF(reset,#ld{cache_connections=true}),
   NSF(close,'').
 
 subscriber_send_tcp_nocache_test() ->
-  {PR,SF} = mk_sender_receiver(tcp,#ld{cache_connections=false}),
+  PR = mk_receiver(tcp),
+  SF = mk_sender(tcp,#ld{cache_connections=false}),
   ?assert(send_receive(PR,SF)),
   SF(close,''),
   SF(reset,#ld{cache_connections=false}).
 
 subscriber_send_tcp_cache_test() ->
-  {PR0,SF0} = mk_sender_receiver(tcp,#ld{cache_connections=true}),
-  ?assert(send_receive(PR0,SF0)),
-  SF0(close,''),
-  {PR1,_SF1} = mk_sender_receiver(tcp,#ld{cache_connections=false}),
-  SF2 = SF0(reset,#ld{cache_connections=true}),
-  ?assert(send_receive(PR1,SF2)),
-  %% SF1(close,''),
-  SF2(close,'').
+  PR0 = mk_receiver(tcp),
+  SF = mk_sender(tcp,#ld{cache_connections=true}),
+  ?assert(send_receive(PR0,SF)),
+  SF(close,''),
+  PR1 = mk_receiver(tcp),
+  NSF = SF(reset,#ld{cache_connections=true}),
+  ?assert(send_receive(PR1,NSF)),
+  NSF(close,'').
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test helpers
 
-mk_sender_receiver(Prot,LD) ->
-  L =
+mk_receiver(Prot) ->
+  spawn_monitor(
     case Prot of
       udp ->
         fun() ->
@@ -621,13 +637,16 @@ mk_sender_receiver(Prot,LD) ->
             {ok,Socket} = gen_tcp:accept(ListenSock),
             receive {tcp,Socket,B}->exit(B)end
         end
-    end,
-  PR = spawn_monitor(L),
-  receive after 200 -> ok end,
-  {PR,mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD)}.
+    end).
 
-send_receive({Pid,Ref},SF) ->
+mk_sender(Prot,LD) ->
+  mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD).
+
+send_receive(PR,SF) ->
   SF(send,true),
+  do_receive(PR).
+
+do_receive({Pid,Ref}) ->
   receive {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
       binary_to_term(prf_crypto:decrypt("PWD",X))
   after 1000 -> false
