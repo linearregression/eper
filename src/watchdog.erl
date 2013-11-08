@@ -126,9 +126,11 @@ add_send_subscriber(Proto,Host,Port,PassPhrase) ->
 add_log_subscriber({trc,FN}) ->
   send_to_wd({add_subscriber,{{log,trc},FN}});
 add_log_subscriber({text,FN}) ->
-  send_to_wd({add_subscriber,{{text,trc},FN}});
+  send_to_wd({add_subscriber,{{log,text},FN}});
 add_log_subscriber(screen) ->
-  send_to_wd({add_subscriber,{{log,screen},''}}).
+  send_to_wd({add_subscriber,{{log,screen},''}});
+add_log_subscriber(X) ->
+  {error,{illegal_subscriber,X}}.
 
 delete_subscribers() ->
   send_to_wd(delete_subscribers).
@@ -524,10 +526,13 @@ mk_log(Type,FN) ->
   end.
 
 send_log_term(text,FD,Term) ->
-  print_term(FD,expand_recs(Term));
+  io:fwrite(FD," ~p.~n",[expand_recs(Term)]);
 send_log_term(trc,FD,Term) ->
   S = byte_size(Term),
   file:write(FD,<<0,S:32/integer,Term/binary>>).
+
+close_log_file(FD) when is_record(FD,file_descriptor) -> file:close(FD);
+close_log_file(_) -> ok.
 
 open_log_file(FN) ->
   case FN of
@@ -535,19 +540,10 @@ open_log_file(FN) ->
     _      -> open_file(FN)
   end.
 
-close_log_file(FD) when is_record(FD,file_descriptor) -> file:close(FD);
-close_log_file(_) -> ok.
-
 open_file(FN) ->
   ok = filelib:ensure_dir(FN),
   {ok,FD} = file:open(FN,[write,raw,binary]),
   FD.
-
-print_term(FD,Term) ->
-  case node(FD) == node() of
-    true -> ?log(Term);
-    false-> io:fwrite(FD," ~p~n",[Term])
-  end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 expand_recs(List) when is_list(List) -> [expand_recs(L)||L<-List];
@@ -622,22 +618,19 @@ subscriber_send_tcp_cache_test() ->
 %% test helpers
 
 mk_receiver(Prot) ->
-  spawn_monitor(
-    case Prot of
-      udp ->
-        fun() ->
-            Opts = [binary,{reuseaddr,true},{active,true}],
-            {ok,_} = gen_udp:open(16#dada,Opts),
-            receive {udp,_,{127,0,0,1},_,B}->exit(B)end
-        end;
-      tcp ->
-        fun() ->
-            Opts = [binary,{reuseaddr,true},{active,true}],
-            {ok,ListenSock} = gen_tcp:listen(16#dada,Opts),
-            {ok,Socket} = gen_tcp:accept(ListenSock),
-            receive {tcp,Socket,B}->exit(B)end
-        end
-    end).
+  spawn_monitor(mk_receiver(Prot,[binary,{reuseaddr,true},{active,true}])).
+
+mk_receiver(udp,Opts) ->
+  fun() ->
+      {ok,_} = gen_udp:open(16#dada,Opts),
+      receive {udp,_,{127,0,0,1},_,B}->exit(B)end
+  end;
+mk_receiver(tcp,Opts) ->
+  fun() ->
+      {ok,ListenSock} = gen_tcp:listen(16#dada,Opts),
+      {ok,Socket} = gen_tcp:accept(ListenSock),
+      receive {tcp,Socket,B}->exit(B)end
+  end.
 
 mk_sender(Prot,LD) ->
   mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD).
