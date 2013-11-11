@@ -300,7 +300,10 @@ do_mon(LD) ->
   LD.
 
 do_user(LD) ->
-  send_report(LD,user),
+  case lists:member({user,true},LD#ld.triggers) of
+    true -> send_report(LD,user);
+    false-> ok
+  end,
   LD.
 
 do_triggers(LD) ->
@@ -357,7 +360,9 @@ delete_subscriber(Key,#ld{subscribers=Subs}) ->
   end.
 
 do_delete_subscriber({_,F}) ->
-  catch F(stop,'').
+  try F(stop,'')
+  catch _:_ -> ok
+  end.
 
 %%   add
 add_subscriber(Key,Val,LD = #ld{subscribers=Subs}) ->
@@ -563,29 +568,50 @@ expand_recs(Term) -> Term.
 %% eunit
 %%lists:member(shell,[element(1,T)||T<-erlang:get_stacktrace()]).
 
+delete_trigger_test() ->
+  watchdog:start(),
+  watchdog:delete_trigger(user),
+  PR0 = mk_receiver(udp),
+  watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
+  receive after 100 -> ok end,
+  watchdog:message(truffle),
+  ?assert(not validate_recv(PR0,truffle)),
+  watchdog:add_trigger(user,true),
+  PR1 = mk_receiver(udp),
+  watchdog:message(truffle),
+  ?assert(validate_recv(PR1,truffle)),
+  watchdog:stop().
+
 start_stop_test() ->
   watchdog:start(),
-  receive after 100 -> ok end,
-  PR = mk_receiver(udp),
+  PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
-  watchdog:state(),
+  receive after 100 -> ok end,
   watchdog:message(truism),
-  ?assert(case do_receive(PR) of
-              {watchdog,'nonode@nohost',_,user,truism} -> true;
-              _ -> false
-          end),
-  watchdog:stop().
+  ?assert(validate_recv(PR0,truism)),
+  PR1 = mk_receiver(udp),
+  watchdog:reset_subscriber({udp,{"localhost",16#dada}}),
+  receive after 100 -> ok end,
+  watchdog:message(truncate),
+  ?assert(validate_recv(PR1,truncate)),
+  watchdog:delete_subscriber({udp,{"localhost",16#dada}}),
+  FN = mk_tmpfile(),
+  watchdog:add_log_subscriber({text,FN}),
+  receive after 100 -> ok end,
+  watchdog:message(trumpet),
+  watchdog:delete_subscriber({log,text}),
+  watchdog:state(),
+  watchdog:stop(),
+  ?assert(validate_file(FN,trumpet)).
 
 subscriber_log_text_test() ->
   watchdog:start(),
   FN = mk_tmpfile(),
   watchdog:add_log_subscriber({text,FN}),
+  receive after 100 -> ok end,
   watchdog:message(trivial),
   watchdog:stop(),
-  receive after 100 -> ok end,
-  {ok,B} = file:read_file(FN),
-  file:delete(FN),
-  {match,[{_,7}]} = re:run(B,"trivial").
+  ?assert(validate_file(FN,trivial)).
 
 subscriber_send_proc_test() ->
   SF = mk_subscriber({pid,self()},'',''),
@@ -597,32 +623,32 @@ subscriber_send_proc_test() ->
 subscriber_send_udp_nocache_test() ->
   PR = mk_receiver(udp),
   SF = mk_sender(udp,#ld{cache_connections=false}),
-  ?assert(send_receive(PR,SF)),
+  ?assert(send_recv(PR,SF)),
   NSF = SF(reset,#ld{cache_connections=false}),
   NSF(close,'').
 
 subscriber_send_udp_cache_test() ->
   PR = mk_receiver(udp),
   SF = mk_sender(udp,#ld{cache_connections=true}),
-  ?assert(send_receive(PR,SF)),
+  ?assert(send_recv(PR,SF)),
   NSF = SF(reset,#ld{cache_connections=true}),
   NSF(close,'').
 
 subscriber_send_tcp_nocache_test() ->
   PR = mk_receiver(tcp),
   SF = mk_sender(tcp,#ld{cache_connections=false}),
-  ?assert(send_receive(PR,SF)),
+  ?assert(send_recv(PR,SF)),
   SF(close,''),
   SF(reset,#ld{cache_connections=false}).
 
 subscriber_send_tcp_cache_test() ->
   PR0 = mk_receiver(tcp),
   SF = mk_sender(tcp,#ld{cache_connections=true}),
-  ?assert(send_receive(PR0,SF)),
+  ?assert(send_recv(PR0,SF)),
   SF(close,''),
   PR1 = mk_receiver(tcp),
   NSF = SF(reset,#ld{cache_connections=true}),
-  ?assert(send_receive(PR1,NSF)),
+  ?assert(send_recv(PR1,NSF)),
   NSF(close,'').
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -646,13 +672,18 @@ mk_receiver(tcp,Opts) ->
 mk_sender(Prot,LD) ->
   mk_subscriber({Prot,{"localhost",16#dada}},"PWD",LD).
 
-send_receive(PR,SF) ->
+send_recv(PR,SF) ->
   SF(send,true),
-  do_receive(PR).
+  validate_recv(PR,true).
 
-do_receive({Pid,Ref}) ->
-  receive {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
-      binary_to_term(prf_crypto:decrypt("PWD",X))
+validate_recv({Pid,Ref},Match) ->
+  receive
+    {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
+      case binary_to_term(prf_crypto:decrypt("PWD",X)) of
+        {watchdog,_,_,user,Match} -> true;
+        Match -> true;
+        _     -> false
+      end
   after 1000 -> false
   end.
 
@@ -660,3 +691,15 @@ mk_tmpfile() ->
   {ok,Dir} = file:get_cwd(),
   [file:delete(F) || F <- filelib:wildcard(filename:join(Dir,"#R*"))],
   filename:join(Dir,io_lib:fwrite("~p",[erlang:make_ref()])).
+
+validate_file(FN,Match) ->
+  receive after 100 -> ok end,
+  {ok,B} = file:read_file(FN),
+  file:delete(FN),
+  case re:run(B,to_list(Match)) of
+    {match,_} -> true;
+    NoMatch   -> {NoMatch,B,Match,FN}
+  end.
+
+to_list(L) when is_list(L) -> L;
+to_list(A) when is_atom(A) -> atom_to_list(A).
