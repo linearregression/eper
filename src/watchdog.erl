@@ -10,7 +10,7 @@
 % API
 -export(
    [config/2
-    ,start/0,stop/0,state/0
+    ,start/0,stop/0,state/0,state/1
     ,add_send_subscriber/4,add_log_subscriber/1,add_proc_subscriber/1
     ,delete_subscriber/1,reset_subscriber/1
     ,delete_subscribers/0,reset_subscribers/0
@@ -19,7 +19,8 @@
 
 % gen_serv callbacks
 -export(
-   [handle_info/2
+   [ handle_info/2
+    ,handle_call/3
     ,init/1
     ,rec_info/1]).
 
@@ -92,69 +93,73 @@ stop() ->
   gen_serv:stop(?MODULE).
 
 state() ->
-  handle_state().
+  try
+    State = gen_serv:get_state(?MODULE),
+    [I || {Key,_} = I <- State,lists:member(Key,show_these_fields())]
+  catch
+    _:R -> R
+  end.
+
+state(Item) ->
+  try gen_serv:get_state(?MODULE,Item)
+  catch _:_ -> undefined
+  end.
 
 config(prfPrc,{max_procs,MaxProcs}) ->
   prfTarg:config({prfPrc,{max_procs,MaxProcs}});
 config(Tag,Val) ->
-  send_to_wd({cfg,Tag,Val}),
+  call_wd({cfg,Tag,Val}),
   state().
 
 delete_trigger(Key) ->
-  send_to_wd({delete_trigger,Key}).
+  call_wd({delete_trigger,Key}).
 
 add_trigger(Key,Val) ->
-  send_to_wd({add_trigger,Key,Val}).
+  call_wd({add_trigger,Key,Val}).
 
 add_proc_subscriber(Pid) when is_pid(Pid) ->
   case is_process_alive(Pid) of
-    true -> send_to_wd({add_subscriber,{{pid,Pid},''}});
+    true -> call_wd({add_subscriber,{{pid,Pid},''}});
     false-> {error,no_such_pid}
   end;
 add_proc_subscriber(Reg) when is_atom(Reg) ->
-  send_to_wd({add_subscriber,{{pid,{Reg,node()}},''}});
+  call_wd({add_subscriber,{{pid,{Reg,node()}},''}});
 add_proc_subscriber({Reg,Node}) when is_atom(Reg),is_atom(Node) ->
-  send_to_wd({add_subscriber,{{pid,{Reg,Node}},''}}).
+  call_wd({add_subscriber,{{pid,{Reg,Node}},''}}).
 
 %% E.g:  watchdog:add_send_subscriber(tcp,"localhost",56669,"I'm a Cookie").
 add_send_subscriber(Proto,Host,Port,PassPhrase) ->
   case inet:gethostbyname(Host) of
-    {ok,_}    -> send_to_wd({add_subscriber,{{Proto,{Host,Port}},PassPhrase}});
+    {ok,_}    -> call_wd({add_subscriber,{{Proto,{Host,Port}},PassPhrase}});
     {error,R} -> {error,R}
   end.
 
 add_log_subscriber({trc,FN}) ->
-  send_to_wd({add_subscriber,{{log,trc},FN}});
+  call_wd({add_subscriber,{{log,trc},FN}});
 add_log_subscriber({text,FN}) ->
-  send_to_wd({add_subscriber,{{log,text},FN}});
+  call_wd({add_subscriber,{{log,text},FN}});
 add_log_subscriber(screen) ->
-  send_to_wd({add_subscriber,{{log,screen},''}});
+  call_wd({add_subscriber,{{log,screen},''}});
 add_log_subscriber(X) ->
   {error,{illegal_subscriber,X}}.
 
 delete_subscribers() ->
-  send_to_wd(delete_subscribers).
+  call_wd(delete_subscribers).
 
 delete_subscriber(Key) ->
-  send_to_wd({delete_subscriber,Key}).
+  call_wd({delete_subscriber,Key}).
 
 reset_subscribers() ->
-  send_to_wd(reset_subscribers).
+  call_wd(reset_subscribers).
 
 reset_subscriber(Key) ->
-  send_to_wd({reset_subscriber,Key}).
+  call_wd({reset_subscriber,Key}).
 
 message(Term) ->
-  send_to_wd({user,Term}).
+  call_wd({user,Term}).
 
-send_to_wd(Term) ->
-  try
-    ?MODULE ! Term,
-    ok
-  catch
-    error:badarg   -> {error,watchdog_not_started};
-    _:R            -> {error,R}
-  end.
+call_wd(Term) ->
+  gen_server:call(?MODULE,Term).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init([]) ->
@@ -163,46 +168,47 @@ init([]) ->
   LD.
 
 % upgrade
-handle_info(Msg,OLD) when not is_record(OLD,ld) ->
-  handle_info(Msg,upgrade(OLD));
+handle_call(Msg,From,OLD) when not is_record(OLD,ld) ->
+  handle_call(Msg,From,upgrade(OLD));
+
+handle_call({user,Data},_,LD) -> % data from user
+  NLD = LD#ld{userData=Data},
+  try {ok,do_user(check_jailed(NLD,userData))}
+  catch _ -> {ok,NLD}
+  end;
 
 % admin configs
-handle_info({cfg,timeout_restart,TR},LD) when is_integer(TR) ->
-  LD#ld{timeout_restart=TR};
-handle_info({cfg,max_jailed,MJ},LD)      when is_integer(MJ) ->
-  LD#ld{max_jailed=MJ};
-handle_info({cfg,timeout_release,TR},LD) when is_integer(TR)->
-  LD#ld{timeout_release=TR};
-handle_info({cfg,cache_connections,TR},LD) when is_boolean(TR)->
-  LD#ld{cache_connections=TR};
+handle_call({cfg,timeout_restart,TR},_,LD) when is_integer(TR) ->
+  {ok,LD#ld{timeout_restart=TR}};
+handle_call({cfg,max_jailed,MJ},_,LD)      when is_integer(MJ) ->
+  {ok,LD#ld{max_jailed=MJ}};
+handle_call({cfg,timeout_release,TR},_,LD) when is_integer(TR)->
+  {ok,LD#ld{timeout_release=TR}};
+handle_call({cfg,cache_connections,TR},_,LD) when is_boolean(TR)->
+  {ok,LD#ld{cache_connections=TR}};
 
 % admin triggers
-handle_info({delete_trigger,Key},LD) ->
-  LD#ld{triggers=delete_trigger(LD#ld.triggers,Key)};
-handle_info({add_trigger,Key,Val},LD) ->
-  LD#ld{triggers=add_trigger(LD#ld.triggers,Key,Val)};
+handle_call({delete_trigger,Key},_,LD) ->
+  {ok,LD#ld{triggers=delete_trigger(LD#ld.triggers,Key)}};
+handle_call({add_trigger,Key,Val},_,LD) ->
+  {ok,LD#ld{triggers=add_trigger(LD#ld.triggers,Key,Val)}};
 
 % admin subscribers
-handle_info(reset_subscribers,LD) ->
-  LD#ld{subscribers=reset_subscribers(LD)};
-handle_info({reset_subscriber,Key},LD) ->
-  LD#ld{subscribers=reset_subscriber(Key,LD)};
-handle_info(delete_subscribers,LD) ->
-  LD#ld{subscribers=delete_subscribers(LD)};
-handle_info({delete_subscriber,Key},LD) ->
-  LD#ld{subscribers=delete_subscriber(Key,LD)};
-handle_info({add_subscriber,{Key,Val}},LD) ->
-  LD#ld{subscribers=add_subscriber(Key,Val,LD)};
+handle_call(reset_subscribers,_,LD) ->
+  {ok,LD#ld{subscribers=reset_subscribers(LD)}};
+handle_call({reset_subscriber,Key},_,LD) ->
+  {ok,LD#ld{subscribers=reset_subscriber(Key,LD)}};
+handle_call(delete_subscribers,_,LD) ->
+  {ok,LD#ld{subscribers=delete_subscribers(LD)}};
+handle_call({delete_subscriber,Key},_,LD) ->
+  {ok,LD#ld{subscribers=delete_subscriber(Key,LD)}};
+handle_call({add_subscriber,{Key,Val}},_,LD) ->
+  {ok,LD#ld{subscribers=add_subscriber(Key,Val,LD)}}.
 
 % events
 handle_info(trigger,LD) -> % fake trigger for debugging
   send_report(LD,test),
   LD;
-handle_info({user,Data},LD) -> % data from user
-  NLD = LD#ld{userData=Data},
-  try do_user(check_jailed(NLD,userData))
-  catch _ -> NLD
-  end;
 handle_info({{data,_},Data},LD) -> % data from prfTarg
   erlang:garbage_collect(self()),
   NLD = LD#ld{prfData=Data},
@@ -226,17 +232,6 @@ handle_info({timeout,_,{release,Pid}},LD) -> % release a pid from jail
 handle_info(X,LD) ->
   ?log({unexpected_msg,X}),
   LD.
-
-handle_state() ->
-  handle_state(show_these_fields()).
-
-handle_state(Ks) ->
-  try
-    State = gen_serv:get_state(?MODULE),
-    [I || {Key,_} = I <- State,lists:member(Key,Ks)]
-  catch
-    _:R -> R
-  end.
 
 start_monitor(Triggers) ->
   erlang:system_monitor(self(),sysmons(Triggers)).
@@ -573,7 +568,6 @@ delete_trigger_test() ->
   watchdog:delete_trigger(user),
   PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
-  receive after 100 -> ok end,
   watchdog:message(truffle),
   ?assert(not validate_recv(PR0,truffle)),
   watchdog:add_trigger(user,true),
@@ -584,20 +578,19 @@ delete_trigger_test() ->
 
 start_stop_test() ->
   watchdog:start(),
+  delete_triggers(),
+  watchdog:add_trigger(user,true),
   PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
-  receive after 100 -> ok end,
   watchdog:message(truism),
   ?assert(validate_recv(PR0,truism)),
   PR1 = mk_receiver(udp),
   watchdog:reset_subscriber({udp,{"localhost",16#dada}}),
-  receive after 100 -> ok end,
   watchdog:message(truncate),
   ?assert(validate_recv(PR1,truncate)),
   watchdog:delete_subscriber({udp,{"localhost",16#dada}}),
   FN = mk_tmpfile(),
   watchdog:add_log_subscriber({text,FN}),
-  receive after 100 -> ok end,
   watchdog:message(trumpet),
   watchdog:delete_subscriber({log,text}),
   watchdog:state(),
@@ -608,12 +601,18 @@ subscriber_log_text_test() ->
   watchdog:start(),
   FN = mk_tmpfile(),
   watchdog:add_log_subscriber({text,FN}),
-  receive after 100 -> ok end,
   watchdog:message(trivial),
   watchdog:stop(),
   ?assert(validate_file(FN,trivial)).
 
 subscriber_send_proc_test() ->
+  watchdog:start(),
+  watchdog:add_proc_subscriber(self()),
+  watchdog:message(finicky),
+  ?assert(receive X -> erlang:display(X),true after 0 -> false end),
+  watchdog:stop().
+
+subs_send_proc_test() ->
   SF = mk_subscriber({pid,self()},'',''),
   SF(send,woohoo),
   ?assert(receive woohoo -> true after 0 -> false end),
@@ -654,6 +653,9 @@ subscriber_send_tcp_cache_test() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test helpers
 
+delete_triggers() ->
+  [watchdog:delete_trigger(K) || {K,_} <- state(triggers)].
+
 mk_receiver(Prot) ->
   spawn_monitor(mk_receiver(Prot,[binary,{reuseaddr,true},{active,true}])).
 
@@ -681,8 +683,7 @@ validate_recv({Pid,Ref},Match) ->
     {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
       case binary_to_term(prf_crypto:decrypt("PWD",X)) of
         {watchdog,_,_,user,Match} -> true;
-        Match -> true;
-        _     -> false
+        Match -> true
       end
   after 1000 -> false
   end.
@@ -693,7 +694,6 @@ mk_tmpfile() ->
   filename:join(Dir,io_lib:fwrite("~p",[erlang:make_ref()])).
 
 validate_file(FN,Match) ->
-  receive after 100 -> ok end,
   {ok,B} = file:read_file(FN),
   file:delete(FN),
   case re:run(B,to_list(Match)) of
