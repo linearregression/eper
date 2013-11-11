@@ -565,6 +565,9 @@ expand_recs(Term) -> Term.
 
 delete_trigger_test() ->
   watchdog:start(),
+  watchdog:config(timeout_release,0),
+  delete_triggers(),
+  watchdog:add_trigger(user,true),
   watchdog:delete_trigger(user),
   PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
@@ -572,13 +575,14 @@ delete_trigger_test() ->
   ?assert(not validate_recv(PR0,truffle)),
   watchdog:add_trigger(user,true),
   PR1 = mk_receiver(udp),
-  watchdog:message(truffle),
-  ?assert(validate_recv(PR1,truffle)),
+  watchdog:message(trifle),
+  ?assert(validate_recv(PR1,trifle)),
   watchdog:stop().
 
 start_stop_test() ->
   watchdog:start(),
   delete_triggers(),
+  watchdog:config(timeout_release,0),
   watchdog:add_trigger(user,true),
   PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
@@ -594,8 +598,8 @@ start_stop_test() ->
   watchdog:message(trumpet),
   watchdog:delete_subscriber({log,text}),
   watchdog:state(),
-  watchdog:stop(),
-  ?assert(validate_file(FN,trumpet)).
+  ?assert(validate_file(FN,trumpet)),
+  watchdog:stop().
 
 subscriber_log_text_test() ->
   watchdog:start(),
@@ -609,7 +613,7 @@ subscriber_send_proc_test() ->
   watchdog:start(),
   watchdog:add_proc_subscriber(self()),
   watchdog:message(finicky),
-  ?assert(receive X -> erlang:display(X),true after 0 -> false end),
+  ?assert(receive {watchdog,_,_,user,finicky} -> true after 0 -> false end),
   watchdog:stop().
 
 subs_send_proc_test() ->
@@ -683,7 +687,7 @@ validate_recv({Pid,Ref},Match) ->
     {'DOWN',Ref,process,Pid,<<_:32,X/binary>>} ->
       case binary_to_term(prf_crypto:decrypt("PWD",X)) of
         {watchdog,_,_,user,Match} -> true;
-        Match -> true
+        Match                     -> true
       end
   after 1000 -> false
   end.
