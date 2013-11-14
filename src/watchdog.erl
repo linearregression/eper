@@ -52,18 +52,20 @@ show_these_fields() ->
    jailed,subscribers,triggers].
 
 upgrade({ld,TR,MJ,TS,Js,Ss,Ts,PS,UD,PD,MD}) ->
-  #ld{timeout_restart=TR
-     ,max_jailed=MJ
-     ,timeout_release=TS
-     ,cache_connections=false
-     ,jailed=Js
-     ,subscribers=Ss
-     ,triggers=Ts
-     ,prfState=PS
-     ,userData=UD
-     ,prfData=PD
-     ,monData=MD
-     }.
+  LD =
+    #ld{timeout_restart=TR
+        ,max_jailed=MJ
+        ,timeout_release=TS
+        ,cache_connections=false
+        ,jailed=Js
+        ,subscribers=Ss
+        ,triggers=Ts
+        ,prfState=PS
+        ,userData=UD
+        ,prfData=PD
+        ,monData=MD
+       },
+  LD#ld{subscribers=reset_subscribers(LD)}.
 
 %% constants
 
@@ -75,7 +77,7 @@ default_triggers() ->
    ,{[sysMon,busy_dist_port],true}
    ,{user,true}
    ,{ticker,true}
-   ,{[prfSys,user],fun(X)->true=(0.95<X) end}
+   ,{[prfSys,user],  fun(X)->true=(0.95<X)end}
    ,{[prfSys,kernel],fun(X)->true=(0.5<X) end}
    ,{[prfSys,iowait],fun(X)->true=(0.3<X) end}
   ].
