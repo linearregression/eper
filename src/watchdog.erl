@@ -67,7 +67,13 @@ upgrade({ld,TR,MJ,TS,Js,Ss,Ts,PS,UD,PD,MD}) ->
        },
   LD#ld{subscribers=reset_subscribers(LD)}.
 
-%% constants
+%% {ok,Toks,_LineNo} = erl_scan:string("X<0.1 andalso X>0.3."),
+%% [Var] = lists:usort([V||{var,_,V}<-Toks])
+%% {ok,[AbsExp]} = erl_parse:parse_exprs(Toks),
+%% {value,Val,_Binds} = erl_eval:expr(AbsExp,[{Var,0.2}]),
+%% Val.
+%% element(2,erl_eval:expr(hd(element(2,erl_parse:parse_exprs(
+%%    element(2,erl_scan:string("0.1<X andalso X<0.3."))))))).
 
 default_triggers() ->
   [ {[sysMon,long_gc],500}             %gc time [ms]
