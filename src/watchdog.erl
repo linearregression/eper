@@ -37,7 +37,7 @@
 
          ,jailed=[]                      %jailed pids
          ,subscribers=[]                 %where to send our reports
-         ,triggers=default_triggers()    %{atom(Tag), fun/1->no|fun/1}
+         ,triggers=[]                    %{atom(Tag), fun/1->no|fun/1}
          ,prfState                       %prfTarg:subscribe return val
          ,userData                       %last user data
          ,prfData                        %last prf data
@@ -101,17 +101,15 @@ stop() ->
   gen_serv:stop(?MODULE).
 
 state() ->
-  try
-    State = gen_serv:get_state(?MODULE),
-    [I || {Key,_} = I <- State,lists:member(Key,show_these_fields())]
-  catch
-    _:R -> R
-  end.
+  [{I,state(I)} || I <- show_these_fields()].
 
+state(triggers) ->
+  F = fun({K,true}) -> K;
+         ({K,{S,_,_}}) -> {K,S};
+         (KV) -> KV end,
+  lists:map(F,gen_serv:get_state(?MODULE,triggers));
 state(Item) ->
-  try gen_serv:get_state(?MODULE,Item)
-  catch _:_ -> undefined
-  end.
+  {Item,gen_serv:get_state(?MODULE,Item)}.
 
 config(prfPrc,{max_procs,MaxProcs}) ->
   prfTarg:config({prfPrc,{max_procs,MaxProcs}});
@@ -174,9 +172,10 @@ call_wd(Term) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init([]) ->
-  LD = #ld{prfState=prfTarg:subscribe(node(),self(),[prfSys,prfPrc])},
-  start_monitor(LD#ld.triggers),
-  LD.
+  Triggers = add_trigs(default_triggers()),
+  PrfState = prfTarg:subscribe(node(),self(),[prfSys,prfPrc]),
+  start_monitor(Triggers),
+  #ld{prfState=PrfState,triggers=Triggers}.
 
 % upgrade
 handle_call(Msg,From,OLD) when not is_record(OLD,ld) ->
@@ -268,6 +267,11 @@ stop_monitor() ->
 %% Val :: number() | function()
 %% Key :: list(Tag)
 %% Tag :: atom() - tags into the data structure. i.e. [prfSys,iowait]
+add_trigs(Trigs) ->
+  ATF = fun({K,V},Ts) ->add_trig(Ts,K,V);
+           (K,Ts)     ->add_trig(Ts,K,true) end,
+  lists:foldl(ATF,[],Trigs).
+
 add_trig(Triggers,{Key,Val}) ->
   maybe_restart(Key,add_trig(Triggers,Key,Val)).
 
@@ -278,27 +282,24 @@ delete_trig(Triggers,Key) ->
   maybe_restart(Key,del_trig(Triggers,Key)).
 
 del_trig(Triggers,Key) ->
-  DTF = fun(T,A) when Key=:=T orelse Key=:=element(1,T) -> A;
+  DTF = fun({K,_},A) when Key=:=K -> A;
            (T,A)->[T|A] end,
   lists:foldl(DTF,[],Triggers).
 
 mk_trigger(Key,Int)  when is_integer(Int)  -> {Key,Int};
-mk_trigger(Key,true) -> Key;
+mk_trigger(Key,true) -> {Key,true};
 mk_trigger(Key,Str) ->
   {ok,Toks,_LineNo} = erl_scan:string(Str),
   [Var] = lists:usort([V||{var,_,V}<-Toks]),
   {ok,[AbsExpr]} = erl_parse:parse_exprs(Toks++[{dot,1}]),
-  {Key,Str,{Var,AbsExpr}}.
+  {Key,{Str,Var,AbsExpr}}.
 
 maybe_restart(Key,Triggers) ->
   case Key of
     [sysMon|_] -> stop_monitor(),start_monitor(Triggers);
-    _ -> Triggers
-  end.
-
-run_trigger({Var,AbsExpr},Val) ->
-  {value,Result,_Binds} = erl_eval:expr(AbsExpr,[{Var,Val}]),
-  Result.
+    _ -> ok
+  end,
+  Triggers.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 check_jailed(LD,_) when LD#ld.max_jailed < length(LD#ld.jailed) ->
@@ -323,31 +324,35 @@ do_mon(LD) ->
   LD.
 
 do_user(LD) ->
-  case check_trigger(user,LD#ld.triggers),[]) of
+  case check_trigger(user,LD#ld.triggers,[]) of
     true -> send_report(LD,user);
     false-> ok
   end,
   LD.
 
 do_triggers(LD) ->
-  {Triggered,NewTriggers} = check_triggers(LD#ld.triggers,LD#ld.prfData),
-  [send_report(LD,Trig) || Trig <- Triggered],
-  LD#ld{triggers=NewTriggers}.
+  Keys = check_triggers(LD#ld.triggers,LD#ld.prfData),
+  [send_report(LD,Key) || Key <- Keys],
+  LD.
 
 check_triggers(Triggers,Data) ->
-  case check_triggers(Triggers,Data,[]) of
-    [] -> {[],Triggers};
-    Trigd -> Keys = [Key || {Key,_} <- Trigd],{Keys,Trigd}
+  F = fun({Key,_},A)->case check_trigger(Key,Triggers,Data) of
+                        true -> [Key|A];
+                        false-> A
+                      end end,
+  lists:foldl(F,[],Triggers).
+
+check_trigger(Key,Triggers,Data) ->
+  case lists:keyfind(Key,1,Triggers) of
+    false               -> false;
+    {Key,true}          -> true;
+    {[sysMon|_],_}      -> false;
+    {Key,{_,Var,AExpr}} -> run_trigger(Var,AExpr,get_measurement(Key,Data))
   end.
 
-check_triggers([],_,O) -> O;
-check_triggers([T|Ts],Data,O) ->
-  check_triggers(Ts,Data,try [check_trigger(T,Data)|O] catch _:_-> O end).
-
-check_trigger(Key,_Data) ->
-  true;
-check_trigger({Key,_,Trig},Data) ->
-  {Key,run_trigger(Trig,get_measurement(Key,Data))}.
+run_trigger(Var,AbsExpr,Val) ->
+  {value,Result,_Binds} = erl_eval:expr(AbsExpr,[{Var,Val}]),
+  Result.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% admin subscribers
@@ -684,12 +689,13 @@ add_trigger_test() ->
      ,user
      ,[sysMon,busy_dist_port]
      ,user
-     ,{[prfSys,user],  "0.95<X"}],
+     ,{[prfSys,user], "0.95<X"}],
   ATF = fun({K,V},Ts)->add_trig(Ts,K,V);(K,Ts)->add_trig(Ts,K,true)end,
-  [user,
+  [{user,true},
    {[sysMon,long_gc],500},
-   {[prfSys,user],"0.95<X",{'X',{op,1,'<',{float,1,0.95},{var,1,'X'}}}},
-   [sysMon,busy_dist_port]] == lists:foldl(ATF,[],Trigs).
+   {[prfSys,user],{"0.95<X",'X',{op,1,'<',{float,1,0.95},{var,1,'X'}}}},
+   {[sysMon,busy_dist_port],true}] ==
+    lists:foldl(ATF,[],Trigs).
 
 del_trigger_test() ->
   Trigs =
@@ -700,13 +706,13 @@ del_trigger_test() ->
      ,{[prfSys,user],  "0.95<X"}],
   ATF = fun({K,V},Ts)->add_trig(Ts,K,V);(K,Ts)->add_trig(Ts,K,true)end,
   DTF = fun({K,_},Ts)->del_trig(Ts,K);(K,Ts)->del_trig(Ts,K)end,
-  [] == lists:foldl(DTF,lists:foldl(ATF,[],Trigs),Trigs).
+   lists:foldl(DTF,lists:foldl(ATF,[],Trigs),Trigs).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test helpers
 
 delete_triggers() ->
-  [watchdog:delete_trigger(K) || {K,_} <- state(triggers)].
+  [delete_trigger(case T of {K,_}->K; T->T end) || T <- state(triggers)].
 
 mk_receiver(Prot) ->
   spawn_monitor(mk_receiver(Prot,[binary,{reuseaddr,true},{active,true}])).
