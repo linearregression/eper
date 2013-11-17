@@ -14,7 +14,7 @@
     ,add_send_subscriber/4,add_log_subscriber/1,add_proc_subscriber/1
     ,delete_subscriber/1,reset_subscriber/1
     ,delete_subscribers/0,reset_subscribers/0
-    ,add_trigger/2,delete_trigger/1
+    ,add_trigger/1,add_trigger/2,delete_trigger/1
     ,message/1]).
 
 % gen_serv callbacks
@@ -79,13 +79,13 @@ default_triggers() ->
   [ {[sysMon,long_gc],500}             %gc time [ms]
    ,{[sysMon,long_schedule],500}       %scheduled time [ms]
    ,{[sysMon,large_heap],1024*1024}    %heap size [words]
-   ,{[sysMon,busy_port],true}
-   ,{[sysMon,busy_dist_port],true}
-   ,{user,true}
-   ,{ticker,true}
-   ,{[prfSys,user],  fun(X)->true=(0.95<X)end}
-   ,{[prfSys,kernel],fun(X)->true=(0.5<X) end}
-   ,{[prfSys,iowait],fun(X)->true=(0.3<X) end}
+   ,[sysMon,busy_port]
+   ,[sysMon,busy_dist_port]
+   ,user
+   ,ticker
+   ,{[prfSys,user],  "0.95<X"}
+   ,{[prfSys,kernel],"0.50<X"}
+   ,{[prfSys,iowait],"0.30<X"}
   ].
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -123,7 +123,10 @@ delete_trigger(Key) ->
   call_wd({delete_trigger,Key}).
 
 add_trigger(Key,Val) ->
-  call_wd({add_trigger,Key,Val}).
+  call_wd({add_trigger,{Key,Val}}).
+
+add_trigger(Key) ->
+  call_wd({add_trigger,{Key,true}}).
 
 add_proc_subscriber(Pid) when is_pid(Pid) ->
   case is_process_alive(Pid) of
@@ -197,9 +200,9 @@ handle_call({cfg,cache_connections,TR},_,LD) when is_boolean(TR)->
 
 % admin triggers
 handle_call({delete_trigger,Key},_,LD) ->
-  {ok,LD#ld{triggers=delete_trigger(LD#ld.triggers,Key)}};
-handle_call({add_trigger,Key,Val},_,LD) ->
-  {ok,LD#ld{triggers=add_trigger(LD#ld.triggers,Key,Val)}};
+  {ok,LD#ld{triggers=delete_trig(LD#ld.triggers,Key)}};
+handle_call({add_trigger,KeyVal},_,LD) ->
+  {ok,LD#ld{triggers=add_trig(LD#ld.triggers,KeyVal)}};
 
 % admin subscribers
 handle_call(reset_subscribers,_,LD) ->
@@ -261,26 +264,43 @@ sysmons(Triggers) ->
 stop_monitor() ->
   erlang:system_monitor(undefined).
 
-%% trigger() :: {ID,Val}
+%% trigger() :: {Key,Val}
 %% Val :: number() | function()
-%% ID :: list(Tag)
+%% Key :: list(Tag)
 %% Tag :: atom() - tags into the data structure. i.e. [prfSys,iowait]
-add_trigger(Triggers,ID,Val) ->
-  maybe_restart(ID,[{ID,Val}|clean_triggers(Triggers,[ID])]).
+add_trig(Triggers,{Key,Val}) ->
+  maybe_restart(Key,add_trig(Triggers,Key,Val)).
 
-delete_trigger(Triggers,ID) ->
-  maybe_restart(ID,clean_triggers(Triggers,[ID])).
+add_trig(Triggers,Key,Val) ->
+  lists:sort([mk_trigger(Key,Val)|del_trig(Triggers,Key)]).
 
-maybe_restart(Trig,Triggers) ->
-  case Trig of
+delete_trig(Triggers,Key) ->
+  maybe_restart(Key,del_trig(Triggers,Key)).
+
+del_trig(Triggers,Key) ->
+  DTF = fun(T,A) when Key=:=T orelse Key=:=element(1,T) -> A;
+           (T,A)->[T|A] end,
+  lists:foldl(DTF,[],Triggers).
+
+mk_trigger(Key,Int)  when is_integer(Int)  -> {Key,Int};
+mk_trigger(Key,true) -> Key;
+mk_trigger(Key,Str) ->
+  {ok,Toks,_LineNo} = erl_scan:string(Str),
+  [Var] = lists:usort([V||{var,_,V}<-Toks]),
+  {ok,[AbsExpr]} = erl_parse:parse_exprs(Toks++[{dot,1}]),
+  {Key,Str,{Var,AbsExpr}}.
+
+maybe_restart(Key,Triggers) ->
+  case Key of
     [sysMon|_] -> stop_monitor(),start_monitor(Triggers);
-    _ -> ok
-  end,
-  Triggers.
+    _ -> Triggers
+  end.
 
-clean_triggers(Triggers,IDs) ->
-  lists:filter(fun({ID,_})-> not lists:member(ID,IDs) end,Triggers).
+run_trigger({Var,AbsExpr},Val) ->
+  {value,Result,_Binds} = erl_eval:expr(AbsExpr,[{Var,Val}]),
+  Result.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 check_jailed(LD,_) when LD#ld.max_jailed < length(LD#ld.jailed) ->
   % we take a timeout when enough pids are jailed. conservative is good.
   erlang:start_timer(LD#ld.timeout_restart,self(),restart),
@@ -303,7 +323,7 @@ do_mon(LD) ->
   LD.
 
 do_user(LD) ->
-  case lists:member({user,true},LD#ld.triggers) of
+  case check_trigger(user,LD#ld.triggers),[]) of
     true -> send_report(LD,user);
     false-> ok
   end,
@@ -317,21 +337,17 @@ do_triggers(LD) ->
 check_triggers(Triggers,Data) ->
   case check_triggers(Triggers,Data,[]) of
     [] -> {[],Triggers};
-    Trigd -> IDs = [ID || {ID,_} <- Trigd],
-             {IDs,Trigd++clean_triggers(Triggers,IDs)}
+    Trigd -> Keys = [Key || {Key,_} <- Trigd],{Keys,Trigd}
   end.
 
 check_triggers([],_,O) -> O;
 check_triggers([T|Ts],Data,O) ->
   check_triggers(Ts,Data,try [check_trigger(T,Data)|O] catch _:_-> O end).
 
-check_trigger({ticker,true},_Data) ->
-  {ticker,true};
-check_trigger({ID,T},Data) when is_function(T) ->
-  case T(get_measurement(ID,Data)) of
-    true -> {ID,T};
-    NewT when is_function(NewT)  -> {ID,NewT}
-  end.
+check_trigger(Key,_Data) ->
+  true;
+check_trigger({Key,_,Trig},Data) ->
+  {Key,run_trigger(Trig,get_measurement(Key,Data))}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% admin subscribers
@@ -575,13 +591,13 @@ delete_trigger_test() ->
   watchdog:start(),
   watchdog:config(timeout_release,0),
   delete_triggers(),
-  watchdog:add_trigger(user,true),
+  watchdog:add_trigger(user),
   watchdog:delete_trigger(user),
   PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
   watchdog:message(truffle),
   ?assert(not validate_recv(PR0,truffle)),
-  watchdog:add_trigger(user,true),
+  watchdog:add_trigger(user),
   PR1 = mk_receiver(udp),
   watchdog:message(trifle),
   ?assert(validate_recv(PR1,trifle)),
@@ -591,7 +607,7 @@ start_stop_test() ->
   watchdog:start(),
   delete_triggers(),
   watchdog:config(timeout_release,0),
-  watchdog:add_trigger(user,true),
+  watchdog:add_trigger(user),
   PR0 = mk_receiver(udp),
   watchdog:add_send_subscriber(udp,"localhost",16#dada,"PWD"),
   watchdog:message(truism),
@@ -661,6 +677,30 @@ subscriber_send_tcp_cache_test() ->
   NSF = SF(reset,#ld{cache_connections=true}),
   ?assert(send_recv(PR1,NSF)),
   NSF(close,'').
+
+add_trigger_test() ->
+  Trigs =
+    [{[sysMon,long_gc],500}
+     ,user
+     ,[sysMon,busy_dist_port]
+     ,user
+     ,{[prfSys,user],  "0.95<X"}],
+  ATF = fun({K,V},Ts)->add_trig(Ts,K,V);(K,Ts)->add_trig(Ts,K,true)end,
+  [user,
+   {[sysMon,long_gc],500},
+   {[prfSys,user],"0.95<X",{'X',{op,1,'<',{float,1,0.95},{var,1,'X'}}}},
+   [sysMon,busy_dist_port]] == lists:foldl(ATF,[],Trigs).
+
+del_trigger_test() ->
+  Trigs =
+    [{[sysMon,long_gc],500}             %gc time [ms]
+     ,user
+     ,[sysMon,busy_dist_port]
+     ,user
+     ,{[prfSys,user],  "0.95<X"}],
+  ATF = fun({K,V},Ts)->add_trig(Ts,K,V);(K,Ts)->add_trig(Ts,K,true)end,
+  DTF = fun({K,_},Ts)->del_trig(Ts,K);(K,Ts)->del_trig(Ts,K)end,
+  [] == lists:foldl(DTF,lists:foldl(ATF,[],Trigs),Trigs).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test helpers
