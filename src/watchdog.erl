@@ -243,6 +243,7 @@ handle_info(X,LD) ->
   ?log({unexpected_msg,X}),
   LD.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 start_monitor(Triggers) ->
   erlang:system_monitor(self(),sysmons(Triggers)).
 
@@ -699,14 +700,14 @@ add_trigger_test() ->
 
 del_trigger_test() ->
   Trigs =
-    [{[sysMon,long_gc],500}             %gc time [ms]
+    [{[sysMon,long_gc],500}
      ,user
      ,[sysMon,busy_dist_port]
      ,user
      ,{[prfSys,user],  "0.95<X"}],
   ATF = fun({K,V},Ts)->add_trig(Ts,K,V);(K,Ts)->add_trig(Ts,K,true)end,
   DTF = fun({K,_},Ts)->del_trig(Ts,K);(K,Ts)->del_trig(Ts,K)end,
-   lists:foldl(DTF,lists:foldl(ATF,[],Trigs),Trigs).
+  [] == lists:foldl(DTF,lists:foldl(ATF,[],Trigs),Trigs).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test helpers
