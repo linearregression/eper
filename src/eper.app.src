@@ -3,5 +3,6 @@
   {description, "Erlang Performance and Debugging Tools"},
   {vsn, "0.85.0"},
   {registered, []},
+  {modules, []},
   {applications, [kernel,stdlib]}
  ]}.
